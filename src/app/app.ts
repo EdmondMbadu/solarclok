@@ -1046,8 +1046,8 @@ export class App implements AfterViewInit, OnDestroy {
       this.controls.enablePan = false;
       this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.05;
-      this.controls.minDistance = 2.1;
-      this.controls.maxDistance = 9.2;
+      this.controls.minDistance = 1.75;
+      this.controls.maxDistance = 16.5;
       this.controls.target.set(0, 0, 0);
       this.controls.addEventListener('start', () => {
         this.autoFramingActive = false;
