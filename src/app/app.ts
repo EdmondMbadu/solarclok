@@ -13,6 +13,7 @@ import {
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import * as THREE from 'three';
+import * as topojson from 'topojson-client';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -55,6 +56,31 @@ interface MarkerBundle {
 }
 
 type WorldCityRow = [number, string, number, number, string, string];
+type GeoPosition = [number, number];
+
+interface TopologyData {
+  objects: {
+    countries: object;
+  };
+}
+
+interface GeoFeatureCollection {
+  features: GeoFeature[];
+}
+
+interface GeoFeature {
+  properties?: {
+    name?: string;
+  };
+  geometry: {
+    type: 'Polygon' | 'MultiPolygon';
+    coordinates: GeoPosition[][] | GeoPosition[][][];
+  };
+}
+
+interface GeoMultiLineString {
+  coordinates: GeoPosition[][];
+}
 
 const TAU = Math.PI * 2;
 const MINUTE_MS = 60_000;
@@ -372,6 +398,17 @@ function pseudoRandomPositive(seed: number): number {
   return Math.abs(pseudoRandom(seed));
 }
 
+function hashString(value: string): number {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(index);
+    hash |= 0;
+  }
+
+  return Math.abs(hash);
+}
+
 @Component({
   selector: 'app-root',
   templateUrl: './app.html',
@@ -519,6 +556,7 @@ export class App implements AfterViewInit, OnDestroy {
   private earthSphere?: THREE.Mesh;
   private cloudsSphere?: THREE.Mesh;
   private atmosphereSphere?: THREE.Mesh;
+  private countryBorderLines?: THREE.LineSegments;
   private starField?: THREE.Points;
   private sunMesh?: THREE.Mesh;
   private sunHalo?: THREE.Mesh;
@@ -527,17 +565,23 @@ export class App implements AfterViewInit, OnDestroy {
   private focusGroup?: THREE.Group;
   private tiltGroup?: THREE.Group;
   private markerRoot?: THREE.Group;
+  private cityDetailRoot?: THREE.Group;
   private currentFocusX = 0;
   private currentFocusY = 0;
   private targetFocusX = 0;
   private targetFocusY = 0;
   private readonly markerBundles = new Map<string, MarkerBundle>();
+  private readonly cityLabelObjects: THREE.Object3D[] = [];
+  private readonly labelTextureCache = new Map<string, THREE.CanvasTexture>();
   private readonly tempVector = new THREE.Vector3();
+  private detailRefreshTimer?: number;
+  private frameCount = 0;
 
   private readonly syncSceneEffect = effect(() => {
     const activeCity = this.activeCity();
     const markers = this.citySnapshots();
     const subsolarPoint = this.subsolarPoint();
+    this.worldCities().length;
 
     if (!this.sceneReady) {
       return;
@@ -547,6 +591,7 @@ export class App implements AfterViewInit, OnDestroy {
     this.targetFocusY = -THREE.MathUtils.degToRad(activeCity.lng);
     this.targetFocusX = THREE.MathUtils.degToRad(clamp(activeCity.lat * 0.68, -48, 48));
     this.updateSunTarget(subsolarPoint.lat, subsolarPoint.lng);
+    this.scheduleCityDetailRefresh();
   });
 
   protected trackByCity(_: number, snapshot: CitySnapshot): string {
@@ -714,6 +759,11 @@ export class App implements AfterViewInit, OnDestroy {
     this.controls?.dispose();
     this.composer?.dispose();
     this.renderer?.dispose();
+    this.clearCityDetailLabels();
+
+    if (this.detailRefreshTimer) {
+      clearTimeout(this.detailRefreshTimer);
+    }
 
     this.markerBundles.forEach(({ group }) => {
       group.traverse((object: THREE.Object3D) => {
@@ -727,6 +777,9 @@ export class App implements AfterViewInit, OnDestroy {
         }
       });
     });
+
+    this.labelTextureCache.forEach((texture) => texture.dispose());
+    this.labelTextureCache.clear();
   }
 
   private stopPlayback(): void {
@@ -741,6 +794,20 @@ export class App implements AfterViewInit, OnDestroy {
   private shiftTimeline(deltaMinutes: number): void {
     const nextUtcMs = this.referenceUtcMs() + deltaMinutes * MINUTE_MS;
     this.reanchorMoment(nextUtcMs, this.activeCity());
+  }
+
+  private scheduleCityDetailRefresh(): void {
+    if (!this.isBrowser) {
+      return;
+    }
+
+    if (this.detailRefreshTimer) {
+      clearTimeout(this.detailRefreshTimer);
+    }
+
+    this.detailRefreshTimer = window.setTimeout(() => {
+      this.refreshCityDetailLabels();
+    }, 60);
   }
 
   private async ensureWorldCatalogLoaded(): Promise<void> {
@@ -765,8 +832,51 @@ export class App implements AfterViewInit, OnDestroy {
 
       this.worldCities.set(cities);
       this.cityCatalogStatus.set('ready');
+      this.scheduleCityDetailRefresh();
     } catch {
       this.cityCatalogStatus.set('error');
+    }
+  }
+
+  private async loadGeographyData(): Promise<void> {
+    if (!this.isBrowser || !this.earthSphere || !this.tiltGroup) {
+      return;
+    }
+
+    try {
+      const response = await fetch('data/world-countries-50m.json');
+
+      if (!response.ok) {
+        throw new Error(`Failed to load geography: ${response.status}`);
+      }
+
+      const topology = (await response.json()) as TopologyData;
+      const typedTopology = topology as unknown as Parameters<typeof topojson.feature>[0];
+      const countries = topojson.feature(
+        typedTopology,
+        topology.objects.countries as Parameters<typeof topojson.feature>[1]
+      ) as unknown as GeoFeatureCollection;
+      const borders = topojson.mesh(
+        typedTopology,
+        topology.objects.countries as Parameters<typeof topojson.mesh>[1],
+        (left, right) => left !== right
+      ) as unknown as GeoMultiLineString;
+
+      const detailedTexture = this.createDetailedEarthTexture(countries.features);
+      const earthMaterial = this.earthSphere.material as THREE.MeshPhysicalMaterial;
+      earthMaterial.map = detailedTexture;
+      earthMaterial.needsUpdate = true;
+
+      if (this.countryBorderLines) {
+        this.tiltGroup.remove(this.countryBorderLines);
+        this.countryBorderLines.geometry.dispose();
+        (this.countryBorderLines.material as THREE.Material).dispose();
+      }
+
+      this.countryBorderLines = this.createCountryBorderLines(borders);
+      this.tiltGroup.add(this.countryBorderLines);
+    } catch {
+      return;
     }
   }
 
@@ -812,9 +922,10 @@ export class App implements AfterViewInit, OnDestroy {
       this.focusGroup = new THREE.Group();
       this.tiltGroup = new THREE.Group();
       this.markerRoot = new THREE.Group();
+      this.cityDetailRoot = new THREE.Group();
       this.focusGroup.add(this.tiltGroup);
       this.tiltGroup.rotation.z = EARTH_TILT;
-      this.tiltGroup.add(this.markerRoot);
+      this.tiltGroup.add(this.markerRoot, this.cityDetailRoot);
       this.scene.add(this.focusGroup);
 
       this.createBackdropObjects();
@@ -824,10 +935,13 @@ export class App implements AfterViewInit, OnDestroy {
 
       this.resizeObserver = new ResizeObserver(() => this.handleResize(host));
       this.resizeObserver.observe(host);
+      this.controls.addEventListener('change', () => this.scheduleCityDetailRefresh());
 
       this.sceneReady = true;
       this.syncMarkers(this.citySnapshots(), this.activeCity().id);
       this.updateSunTarget(this.subsolarPoint().lat, this.subsolarPoint().lng);
+      void this.loadGeographyData();
+      void this.ensureWorldCatalogLoaded();
       this.animate();
     } catch {
       this.sceneReady = false;
@@ -1088,6 +1202,313 @@ export class App implements AfterViewInit, OnDestroy {
     });
   }
 
+  private createDetailedEarthTexture(features: GeoFeature[]): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 4096;
+    canvas.height = 2048;
+    const ctx = canvas.getContext('2d')!;
+
+    const oceanGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    oceanGradient.addColorStop(0, '#204a76');
+    oceanGradient.addColorStop(0.42, '#12335a');
+    oceanGradient.addColorStop(1, '#08192d');
+    ctx.fillStyle = oceanGradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let latitude = 0; latitude <= 18; latitude += 1) {
+      const y = (latitude / 18) * canvas.height;
+      ctx.strokeStyle =
+        latitude % 3 === 0 ? 'rgba(184, 215, 242, 0.05)' : 'rgba(184, 215, 242, 0.025)';
+      ctx.lineWidth = latitude % 3 === 0 ? 1.5 : 1;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+
+    for (let longitude = 0; longitude <= 36; longitude += 1) {
+      const x = (longitude / 36) * canvas.width;
+      ctx.strokeStyle =
+        longitude % 3 === 0 ? 'rgba(184, 215, 242, 0.04)' : 'rgba(184, 215, 242, 0.018)';
+      ctx.lineWidth = longitude % 3 === 0 ? 1.2 : 0.8;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+
+    for (const feature of features) {
+      const hash = hashString(feature.properties?.name ?? 'earth');
+      const hue = 104 + (hash % 18);
+      const lightness = 22 + ((hash >> 3) % 10);
+      ctx.fillStyle = `hsl(${hue} 32% ${lightness}%)`;
+      ctx.strokeStyle = 'rgba(210, 236, 209, 0.12)';
+      ctx.lineWidth = 0.65;
+
+      if (feature.geometry.type === 'Polygon') {
+        this.drawTexturePolygon(ctx, feature.geometry.coordinates as GeoPosition[][], canvas);
+      } else {
+        for (const polygon of feature.geometry.coordinates as GeoPosition[][][]) {
+          this.drawTexturePolygon(ctx, polygon, canvas);
+        }
+      }
+    }
+
+    const vignette = ctx.createRadialGradient(
+      canvas.width * 0.5,
+      canvas.height * 0.5,
+      canvas.width * 0.18,
+      canvas.width * 0.5,
+      canvas.height * 0.5,
+      canvas.width * 0.6
+    );
+    vignette.addColorStop(0, 'rgba(255,255,255,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.24)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.anisotropy = this.renderer?.capabilities.getMaxAnisotropy?.() ?? 1;
+    return texture;
+  }
+
+  private drawTexturePolygon(
+    ctx: CanvasRenderingContext2D,
+    rings: GeoPosition[][],
+    canvas: HTMLCanvasElement
+  ): void {
+    ctx.beginPath();
+
+    for (const ring of rings) {
+      if (!ring.length) {
+        continue;
+      }
+
+      let first = true;
+      let previousX = 0;
+
+      for (const [lng, lat] of ring) {
+        const x = ((lng + 180) / 360) * canvas.width;
+        const y = ((90 - lat) / 180) * canvas.height;
+
+        if (first || Math.abs(x - previousX) > canvas.width * 0.5) {
+          ctx.moveTo(x, y);
+          first = false;
+        } else {
+          ctx.lineTo(x, y);
+        }
+
+        previousX = x;
+      }
+
+      ctx.closePath();
+    }
+
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  private createCountryBorderLines(borders: GeoMultiLineString): THREE.LineSegments {
+    const positions: number[] = [];
+
+    for (const line of borders.coordinates) {
+      for (let index = 0; index < line.length - 1; index += 1) {
+        const [lngA, latA] = line[index];
+        const [lngB, latB] = line[index + 1];
+        const pointA = latLngToVector(latA, lngA, 1.209);
+        const pointB = latLngToVector(latB, lngB, 1.209);
+        positions.push(pointA.x, pointA.y, pointA.z, pointB.x, pointB.y, pointB.z);
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+
+    const material = new THREE.LineBasicMaterial({
+      color: '#d0ecff',
+      transparent: true,
+      opacity: 0.28
+    });
+
+    return new THREE.LineSegments(geometry, material);
+  }
+
+  private clearCityDetailLabels(): void {
+    if (!this.cityDetailRoot) {
+      return;
+    }
+
+    for (const object of this.cityLabelObjects) {
+      this.cityDetailRoot.remove(object);
+      object.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        mesh.geometry?.dispose?.();
+
+        const material = (child as THREE.Sprite | THREE.Mesh | THREE.Line).material;
+
+        if (Array.isArray(material)) {
+          material.forEach((entry) => entry.dispose());
+        } else {
+          material?.dispose?.();
+        }
+      });
+    }
+
+    this.cityLabelObjects.length = 0;
+  }
+
+  private refreshCityDetailLabels(): void {
+    if (!this.cityDetailRoot || !this.camera || !this.tiltGroup || !this.worldCities().length) {
+      return;
+    }
+
+    this.clearCityDetailLabels();
+
+    const cameraDistance = this.camera.position.length();
+    if (cameraDistance > 4.95) {
+      return;
+    }
+
+    const centerWorld = this.camera.position.clone().normalize().multiplyScalar(1.2);
+    const centerLocal = this.tiltGroup.worldToLocal(centerWorld).normalize();
+    const centerLat = THREE.MathUtils.radToDeg(Math.asin(centerLocal.y));
+    const centerLng = THREE.MathUtils.radToDeg(Math.atan2(centerLocal.x, centerLocal.z));
+    const latitudeWindow = THREE.MathUtils.mapLinear(cameraDistance, 3.4, 4.95, 5.5, 18);
+    const longitudeWindow = latitudeWindow * 1.7;
+    const maxLabels = cameraDistance < 3.75 ? 20 : cameraDistance < 4.2 ? 12 : 7;
+    const candidates: Array<{ city: City; score: number }> = [];
+
+    for (const city of this.worldCities()) {
+      if (Math.abs(city.lat - centerLat) > latitudeWindow) {
+        continue;
+      }
+
+      const lngDiff = Math.abs(normalizeLongitude(city.lng - centerLng));
+      if (lngDiff > longitudeWindow) {
+        continue;
+      }
+
+      const direction = latLngToVector(city.lat, city.lng, 1).normalize();
+      const score = centerLocal.dot(direction);
+
+      if (score < 0.86) {
+        continue;
+      }
+
+      candidates.push({ city, score });
+    }
+
+    candidates.sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.city.name.localeCompare(right.city.name) ||
+        left.city.country.localeCompare(right.city.country)
+    );
+
+    const usedCells = new Set<string>();
+    for (const { city } of candidates) {
+      const cell = `${Math.round(city.lat * 2)}:${Math.round(city.lng * 2)}`;
+
+      if (usedCells.has(cell)) {
+        continue;
+      }
+
+      usedCells.add(cell);
+      const label = this.createCityDetailLabel(city, cameraDistance);
+      this.cityDetailRoot.add(label);
+      this.cityLabelObjects.push(label);
+
+      if (this.cityLabelObjects.length >= maxLabels) {
+        break;
+      }
+    }
+  }
+
+  private createCityDetailLabel(city: City, cameraDistance: number): THREE.Group {
+    const group = new THREE.Group();
+    const direction = latLngToVector(city.lat, city.lng, 1).normalize();
+    const dotPosition = direction.clone().multiplyScalar(1.222);
+    const labelPosition = direction.clone().multiplyScalar(1.31);
+    const dotSize = cameraDistance < 3.8 ? 0.012 : 0.009;
+    const labelScale = cameraDistance < 3.8 ? 0.22 : 0.16;
+
+    const stemGeometry = new THREE.BufferGeometry().setFromPoints([
+      direction.clone().multiplyScalar(1.228),
+      direction.clone().multiplyScalar(1.292)
+    ]);
+    const stem = new THREE.Line(
+      stemGeometry,
+      new THREE.LineBasicMaterial({
+        color: '#d5edff',
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false
+      })
+    );
+
+    const dot = new THREE.Mesh(
+      new THREE.SphereGeometry(dotSize, 8, 8),
+      new THREE.MeshBasicMaterial({
+        color: '#f8fbff',
+        transparent: true,
+        opacity: 0.92
+      })
+    );
+    dot.position.copy(dotPosition);
+
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.getCityLabelTexture(city),
+        transparent: true,
+        depthWrite: false,
+        depthTest: false
+      })
+    );
+    sprite.position.copy(labelPosition);
+    sprite.scale.set(labelScale * 1.9, labelScale * 0.54, 1);
+
+    group.add(stem, dot, sprite);
+    return group;
+  }
+
+  private getCityLabelTexture(city: City): THREE.CanvasTexture {
+    const cached = this.labelTextureCache.get(city.id);
+
+    if (cached) {
+      return cached;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 144;
+    const ctx = canvas.getContext('2d')!;
+
+    ctx.fillStyle = 'rgba(4, 15, 28, 0.82)';
+    ctx.strokeStyle = 'rgba(151, 213, 255, 0.34)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 28);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#f7fbff';
+    ctx.font = "600 42px 'Avenir Next', 'Trebuchet MS', sans-serif";
+    ctx.fillText(city.name, 28, 62);
+
+    ctx.fillStyle = 'rgba(205, 228, 248, 0.9)';
+    ctx.font = "500 26px 'Avenir Next', 'Trebuchet MS', sans-serif";
+    const suffix = city.admin1 ? `${city.admin1}, ${city.country}` : city.country;
+    ctx.fillText(suffix, 28, 104);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    this.labelTextureCache.set(city.id, texture);
+    return texture;
+  }
+
   private createEarthSurfaceTexture(): THREE.CanvasTexture {
     const canvas = document.createElement('canvas');
     canvas.width = 2048;
@@ -1302,6 +1723,11 @@ export class App implements AfterViewInit, OnDestroy {
       this.atmosphereSphere.rotation.y -= 0.00018;
     }
 
+    if (this.countryBorderLines) {
+      const material = this.countryBorderLines.material as THREE.LineBasicMaterial;
+      material.opacity = THREE.MathUtils.mapLinear(this.camera.position.length(), 6.4, 3.4, 0.12, 0.62);
+    }
+
     if (this.starField) {
       this.starField.rotation.y += 0.00008;
       this.starField.rotation.x += 0.00002;
@@ -1314,6 +1740,15 @@ export class App implements AfterViewInit, OnDestroy {
     const pulse = 1 + Math.sin(performance.now() * 0.0022) * 0.06;
     if (this.sunHalo) {
       this.sunHalo.scale.setScalar(pulse);
+    }
+
+    this.frameCount += 1;
+    if (
+      this.frameCount % 10 === 0 &&
+      (Math.abs(this.currentFocusX - this.targetFocusX) > 0.001 ||
+        Math.abs(this.currentFocusY - this.targetFocusY) > 0.001)
+    ) {
+      this.refreshCityDetailLabels();
     }
 
     this.markerBundles.forEach((bundle) => {
