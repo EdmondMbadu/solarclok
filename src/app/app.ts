@@ -82,6 +82,18 @@ interface GeoMultiLineString {
   coordinates: GeoPosition[][];
 }
 
+interface EarthTextureSet {
+  color: THREE.CanvasTexture;
+  bump: THREE.CanvasTexture;
+  roughness: THREE.CanvasTexture;
+}
+
+interface CountryLabelPoint {
+  name: string;
+  lat: number;
+  lng: number;
+}
+
 const TAU = Math.PI * 2;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -574,6 +586,7 @@ export class App implements AfterViewInit, OnDestroy {
   private readonly cityLabelObjects: THREE.Object3D[] = [];
   private readonly labelTextureCache = new Map<string, THREE.CanvasTexture>();
   private readonly tempVector = new THREE.Vector3();
+  private countryLabelPoints: CountryLabelPoint[] = [];
   private detailRefreshTimer?: number;
   private frameCount = 0;
 
@@ -844,7 +857,7 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     try {
-      const response = await fetch('data/world-countries-50m.json');
+      const response = await fetch('data/world-countries-10m.json');
 
       if (!response.ok) {
         throw new Error(`Failed to load geography: ${response.status}`);
@@ -862,9 +875,19 @@ export class App implements AfterViewInit, OnDestroy {
         (left, right) => left !== right
       ) as unknown as GeoMultiLineString;
 
+      this.countryLabelPoints = countries.features
+        .map((feature) => this.computeCountryLabelPoint(feature))
+        .filter((point): point is CountryLabelPoint => point !== null);
+
       const detailedTexture = this.createDetailedEarthTexture(countries.features);
       const earthMaterial = this.earthSphere.material as THREE.MeshPhysicalMaterial;
-      earthMaterial.map = detailedTexture;
+      earthMaterial.map = detailedTexture.color;
+      earthMaterial.bumpMap = detailedTexture.bump;
+      earthMaterial.bumpScale = 0.03;
+      earthMaterial.roughnessMap = detailedTexture.roughness;
+      earthMaterial.roughness = 0.98;
+      earthMaterial.clearcoat = 0.14;
+      earthMaterial.clearcoatRoughness = 0.85;
       earthMaterial.needsUpdate = true;
 
       if (this.countryBorderLines) {
@@ -875,6 +898,7 @@ export class App implements AfterViewInit, OnDestroy {
 
       this.countryBorderLines = this.createCountryBorderLines(borders);
       this.tiltGroup.add(this.countryBorderLines);
+      this.scheduleCityDetailRefresh();
     } catch {
       return;
     }
@@ -915,8 +939,8 @@ export class App implements AfterViewInit, OnDestroy {
       this.controls.enablePan = false;
       this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.05;
-      this.controls.minDistance = 3.4;
-      this.controls.maxDistance = 6.4;
+      this.controls.minDistance = 2.3;
+      this.controls.maxDistance = 6.6;
       this.controls.target.set(0, 0, 0);
 
       this.focusGroup = new THREE.Group();
@@ -1202,83 +1226,209 @@ export class App implements AfterViewInit, OnDestroy {
     });
   }
 
-  private createDetailedEarthTexture(features: GeoFeature[]): THREE.CanvasTexture {
-    const canvas = document.createElement('canvas');
-    canvas.width = 4096;
-    canvas.height = 2048;
-    const ctx = canvas.getContext('2d')!;
+  private createDetailedEarthTexture(features: GeoFeature[]): EarthTextureSet {
+    const width = 4096;
+    const height = 2048;
+    const colorCanvas = document.createElement('canvas');
+    const bumpCanvas = document.createElement('canvas');
+    const roughnessCanvas = document.createElement('canvas');
+    colorCanvas.width = bumpCanvas.width = roughnessCanvas.width = width;
+    colorCanvas.height = bumpCanvas.height = roughnessCanvas.height = height;
 
-    const oceanGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    oceanGradient.addColorStop(0, '#204a76');
-    oceanGradient.addColorStop(0.42, '#12335a');
-    oceanGradient.addColorStop(1, '#08192d');
-    ctx.fillStyle = oceanGradient;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const colorCtx = colorCanvas.getContext('2d')!;
+    const bumpCtx = bumpCanvas.getContext('2d')!;
+    const roughnessCtx = roughnessCanvas.getContext('2d')!;
 
-    for (let latitude = 0; latitude <= 18; latitude += 1) {
-      const y = (latitude / 18) * canvas.height;
-      ctx.strokeStyle =
-        latitude % 3 === 0 ? 'rgba(184, 215, 242, 0.05)' : 'rgba(184, 215, 242, 0.025)';
-      ctx.lineWidth = latitude % 3 === 0 ? 1.5 : 1;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvas.width, y);
-      ctx.stroke();
+    const oceanGradient = colorCtx.createLinearGradient(0, 0, 0, height);
+    oceanGradient.addColorStop(0, '#29567f');
+    oceanGradient.addColorStop(0.18, '#1f466d');
+    oceanGradient.addColorStop(0.46, '#123356');
+    oceanGradient.addColorStop(1, '#09182d');
+    colorCtx.fillStyle = oceanGradient;
+    colorCtx.fillRect(0, 0, width, height);
+
+    bumpCtx.fillStyle = 'rgb(26 26 26)';
+    bumpCtx.fillRect(0, 0, width, height);
+
+    roughnessCtx.fillStyle = 'rgb(16 16 16)';
+    roughnessCtx.fillRect(0, 0, width, height);
+
+    for (let latitude = 0; latitude <= 24; latitude += 1) {
+      const y = (latitude / 24) * height;
+      colorCtx.strokeStyle =
+        latitude % 6 === 0 ? 'rgba(186, 216, 241, 0.045)' : 'rgba(186, 216, 241, 0.02)';
+      colorCtx.lineWidth = latitude % 6 === 0 ? 1.4 : 0.8;
+      colorCtx.beginPath();
+      colorCtx.moveTo(0, y);
+      colorCtx.lineTo(width, y);
+      colorCtx.stroke();
     }
 
-    for (let longitude = 0; longitude <= 36; longitude += 1) {
-      const x = (longitude / 36) * canvas.width;
-      ctx.strokeStyle =
-        longitude % 3 === 0 ? 'rgba(184, 215, 242, 0.04)' : 'rgba(184, 215, 242, 0.018)';
-      ctx.lineWidth = longitude % 3 === 0 ? 1.2 : 0.8;
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvas.height);
-      ctx.stroke();
+    for (let longitude = 0; longitude <= 48; longitude += 1) {
+      const x = (longitude / 48) * width;
+      colorCtx.strokeStyle =
+        longitude % 6 === 0 ? 'rgba(186, 216, 241, 0.032)' : 'rgba(186, 216, 241, 0.014)';
+      colorCtx.lineWidth = longitude % 6 === 0 ? 1.1 : 0.7;
+      colorCtx.beginPath();
+      colorCtx.moveTo(x, 0);
+      colorCtx.lineTo(x, height);
+      colorCtx.stroke();
+    }
+
+    for (let sweep = 0; sweep < 18; sweep += 1) {
+      const y = pseudoRandomPositive(sweep * 1.4) * height;
+      const ellipseHeight = 60 + pseudoRandomPositive(sweep * 2.2) * 120;
+      const gradient = colorCtx.createLinearGradient(0, y - ellipseHeight, 0, y + ellipseHeight);
+      gradient.addColorStop(0, 'rgba(114, 173, 217, 0)');
+      gradient.addColorStop(
+        0.5,
+        `rgba(114, 173, 217, ${0.018 + pseudoRandomPositive(sweep) * 0.02})`
+      );
+      gradient.addColorStop(1, 'rgba(114, 173, 217, 0)');
+      colorCtx.fillStyle = gradient;
+      colorCtx.fillRect(0, y - ellipseHeight, width, ellipseHeight * 2);
     }
 
     for (const feature of features) {
-      const hash = hashString(feature.properties?.name ?? 'earth');
-      const hue = 104 + (hash % 18);
-      const lightness = 22 + ((hash >> 3) % 10);
-      ctx.fillStyle = `hsl(${hue} 32% ${lightness}%)`;
-      ctx.strokeStyle = 'rgba(210, 236, 209, 0.12)';
-      ctx.lineWidth = 0.65;
+      const name = feature.properties?.name ?? 'earth';
+      const hash = hashString(name);
+      const point = this.computeCountryLabelPoint(feature);
+      const absLat = Math.abs(point?.lat ?? 0);
+      const dryFactor = pseudoRandomPositive(hash * 0.031);
+      const lushFactor = pseudoRandomPositive(hash * 0.019);
 
-      if (feature.geometry.type === 'Polygon') {
-        this.drawTexturePolygon(ctx, feature.geometry.coordinates as GeoPosition[][], canvas);
-      } else {
-        for (const polygon of feature.geometry.coordinates as GeoPosition[][][]) {
-          this.drawTexturePolygon(ctx, polygon, canvas);
-        }
+      let baseHue = 115;
+      let baseSaturation = 30;
+      let baseLightness = 28;
+
+      if (absLat > 70) {
+        baseHue = 156;
+        baseSaturation = 14;
+        baseLightness = 72;
+      } else if (absLat > 55) {
+        baseHue = 98;
+        baseSaturation = 22;
+        baseLightness = 34;
+      } else if (absLat < 16 && dryFactor > 0.62) {
+        baseHue = 42;
+        baseSaturation = 38;
+        baseLightness = 40;
+      } else if (absLat < 18) {
+        baseHue = 122;
+        baseSaturation = 36;
+        baseLightness = 28;
+      } else if (absLat < 32) {
+        baseHue = 92;
+        baseSaturation = 30;
+        baseLightness = 31;
       }
+
+      colorCtx.fillStyle = `hsl(${baseHue + (hash % 7) - 3} ${baseSaturation + lushFactor * 10}% ${baseLightness + lushFactor * 6}%)`;
+      colorCtx.strokeStyle = 'rgba(218, 240, 221, 0.16)';
+      colorCtx.lineWidth = 0.55;
+      bumpCtx.fillStyle = `rgb(${82 + lushFactor * 34} ${82 + lushFactor * 34} ${82 + lushFactor * 34})`;
+      roughnessCtx.fillStyle = `rgb(${148 + dryFactor * 48} ${148 + dryFactor * 48} ${148 + dryFactor * 48})`;
+
+      this.forEachFeaturePolygon(feature, (rings) => {
+        this.drawPolygonOnContext(colorCtx, rings, width, height, true, true);
+        this.drawPolygonOnContext(bumpCtx, rings, width, height, true, false);
+        this.drawPolygonOnContext(roughnessCtx, rings, width, height, true, false);
+
+        colorCtx.save();
+        bumpCtx.save();
+        roughnessCtx.save();
+        this.clipPolygonOnContext(colorCtx, rings, width, height);
+        this.clipPolygonOnContext(bumpCtx, rings, width, height);
+        this.clipPolygonOnContext(roughnessCtx, rings, width, height);
+
+        const detailCount = 7 + (hash % 6);
+        for (let index = 0; index < detailCount; index += 1) {
+          const seed = hash * (index + 1);
+          const center = point ?? { lat: 0, lng: 0 };
+          const x = ((normalizeLongitude(center.lng + (pseudoRandomPositive(seed) - 0.5) * 18) + 180) / 360) * width;
+          const y = ((90 - (center.lat + (pseudoRandomPositive(seed * 2.1) - 0.5) * 12)) / 180) * height;
+          const radiusX = 28 + pseudoRandomPositive(seed * 3.7) * 120;
+          const radiusY = 10 + pseudoRandomPositive(seed * 4.4) * 52;
+          const rotation = pseudoRandomPositive(seed * 5.1) * TAU;
+          const toneShift = pseudoRandomPositive(seed * 6.1);
+
+          colorCtx.save();
+          colorCtx.translate(x, y);
+          colorCtx.rotate(rotation);
+          colorCtx.fillStyle =
+            absLat > 68
+              ? `rgba(245, 248, 251, ${0.06 + toneShift * 0.08})`
+              : dryFactor > 0.65 && absLat < 28
+                ? `rgba(211, 178, 110, ${0.08 + toneShift * 0.08})`
+                : `rgba(76, 114, 65, ${0.06 + toneShift * 0.07})`;
+          colorCtx.beginPath();
+          colorCtx.ellipse(0, 0, radiusX, radiusY, 0, 0, TAU);
+          colorCtx.fill();
+          colorCtx.restore();
+
+          bumpCtx.save();
+          bumpCtx.translate(x, y);
+          bumpCtx.rotate(rotation);
+          const relief = Math.floor(126 + toneShift * 80);
+          bumpCtx.fillStyle = `rgb(${relief} ${relief} ${relief})`;
+          bumpCtx.beginPath();
+          bumpCtx.ellipse(0, 0, radiusX * 0.9, radiusY * 0.8, 0, 0, TAU);
+          bumpCtx.fill();
+          bumpCtx.restore();
+
+          roughnessCtx.save();
+          roughnessCtx.translate(x, y);
+          roughnessCtx.rotate(rotation);
+          const rough = Math.floor(118 + toneShift * 90);
+          roughnessCtx.fillStyle = `rgb(${rough} ${rough} ${rough})`;
+          roughnessCtx.beginPath();
+          roughnessCtx.ellipse(0, 0, radiusX * 0.94, radiusY * 0.82, 0, 0, TAU);
+          roughnessCtx.fill();
+          roughnessCtx.restore();
+        }
+
+        colorCtx.restore();
+        bumpCtx.restore();
+        roughnessCtx.restore();
+      });
     }
 
-    const vignette = ctx.createRadialGradient(
-      canvas.width * 0.5,
-      canvas.height * 0.5,
-      canvas.width * 0.18,
-      canvas.width * 0.5,
-      canvas.height * 0.5,
-      canvas.width * 0.6
+    const vignette = colorCtx.createRadialGradient(
+      width * 0.5,
+      height * 0.5,
+      width * 0.18,
+      width * 0.5,
+      height * 0.5,
+      width * 0.64
     );
     vignette.addColorStop(0, 'rgba(255,255,255,0)');
     vignette.addColorStop(1, 'rgba(0,0,0,0.24)');
-    ctx.fillStyle = vignette;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    colorCtx.fillStyle = vignette;
+    colorCtx.fillRect(0, 0, width, height);
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.anisotropy = this.renderer?.capabilities.getMaxAnisotropy?.() ?? 1;
-    return texture;
+    return {
+      color: this.canvasToTexture(colorCanvas),
+      bump: this.canvasToTexture(bumpCanvas),
+      roughness: this.canvasToTexture(roughnessCanvas)
+    };
   }
 
-  private drawTexturePolygon(
+  private forEachFeaturePolygon(feature: GeoFeature, callback: (rings: GeoPosition[][]) => void): void {
+    if (feature.geometry.type === 'Polygon') {
+      callback(feature.geometry.coordinates as GeoPosition[][]);
+      return;
+    }
+
+    for (const polygon of feature.geometry.coordinates as GeoPosition[][][]) {
+      callback(polygon);
+    }
+  }
+
+  private tracePolygonPath(
     ctx: CanvasRenderingContext2D,
     rings: GeoPosition[][],
-    canvas: HTMLCanvasElement
+    width: number,
+    height: number
   ): void {
     ctx.beginPath();
 
@@ -1291,10 +1441,10 @@ export class App implements AfterViewInit, OnDestroy {
       let previousX = 0;
 
       for (const [lng, lat] of ring) {
-        const x = ((lng + 180) / 360) * canvas.width;
-        const y = ((90 - lat) / 180) * canvas.height;
+        const x = ((lng + 180) / 360) * width;
+        const y = ((90 - lat) / 180) * height;
 
-        if (first || Math.abs(x - previousX) > canvas.width * 0.5) {
+        if (first || Math.abs(x - previousX) > width * 0.5) {
           ctx.moveTo(x, y);
           first = false;
         } else {
@@ -1306,9 +1456,76 @@ export class App implements AfterViewInit, OnDestroy {
 
       ctx.closePath();
     }
+  }
 
-    ctx.fill();
-    ctx.stroke();
+  private drawPolygonOnContext(
+    ctx: CanvasRenderingContext2D,
+    rings: GeoPosition[][],
+    width: number,
+    height: number,
+    fill: boolean,
+    stroke: boolean
+  ): void {
+    this.tracePolygonPath(ctx, rings, width, height);
+
+    if (fill) {
+      ctx.fill();
+    }
+
+    if (stroke) {
+      ctx.stroke();
+    }
+  }
+
+  private clipPolygonOnContext(
+    ctx: CanvasRenderingContext2D,
+    rings: GeoPosition[][],
+    width: number,
+    height: number
+  ): void {
+    this.tracePolygonPath(ctx, rings, width, height);
+    ctx.clip();
+  }
+
+  private canvasToTexture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.anisotropy = this.renderer?.capabilities.getMaxAnisotropy?.() ?? 1;
+    return texture;
+  }
+
+  private computeCountryLabelPoint(feature: GeoFeature): CountryLabelPoint | null {
+    const points: GeoPosition[] = [];
+    this.forEachFeaturePolygon(feature, (rings) => {
+      const outerRing = rings[0];
+      if (outerRing) {
+        points.push(...outerRing);
+      }
+    });
+
+    if (!points.length || !feature.properties?.name) {
+      return null;
+    }
+
+    let minLat = 90;
+    let maxLat = -90;
+    let minLng = 180;
+    let maxLng = -180;
+
+    for (const [lng, lat] of points) {
+      minLat = Math.min(minLat, lat);
+      maxLat = Math.max(maxLat, lat);
+      minLng = Math.min(minLng, lng);
+      maxLng = Math.max(maxLng, lng);
+    }
+
+    return {
+      name: feature.properties.name,
+      lat: (minLat + maxLat) / 2,
+      lng: normalizeLongitude((minLng + maxLng) / 2)
+    };
   }
 
   private createCountryBorderLines(borders: GeoMultiLineString): THREE.LineSegments {
@@ -1361,14 +1578,14 @@ export class App implements AfterViewInit, OnDestroy {
   }
 
   private refreshCityDetailLabels(): void {
-    if (!this.cityDetailRoot || !this.camera || !this.tiltGroup || !this.worldCities().length) {
+    if (!this.cityDetailRoot || !this.camera || !this.tiltGroup) {
       return;
     }
 
     this.clearCityDetailLabels();
 
     const cameraDistance = this.camera.position.length();
-    if (cameraDistance > 4.95) {
+    if (cameraDistance > 5.6) {
       return;
     }
 
@@ -1376,9 +1593,52 @@ export class App implements AfterViewInit, OnDestroy {
     const centerLocal = this.tiltGroup.worldToLocal(centerWorld).normalize();
     const centerLat = THREE.MathUtils.radToDeg(Math.asin(centerLocal.y));
     const centerLng = THREE.MathUtils.radToDeg(Math.atan2(centerLocal.x, centerLocal.z));
-    const latitudeWindow = THREE.MathUtils.mapLinear(cameraDistance, 3.4, 4.95, 5.5, 18);
+    const countryMode = cameraDistance > 3.85;
+
+    if (countryMode) {
+      const latitudeWindow = THREE.MathUtils.mapLinear(cameraDistance, 3.85, 5.6, 10, 24);
+      const longitudeWindow = latitudeWindow * 1.9;
+      const maxLabels = cameraDistance < 4.55 ? 8 : 5;
+      const candidates: Array<{ point: CountryLabelPoint; score: number }> = [];
+
+      for (const point of this.countryLabelPoints) {
+        if (Math.abs(point.lat - centerLat) > latitudeWindow) {
+          continue;
+        }
+
+        const lngDiff = Math.abs(normalizeLongitude(point.lng - centerLng));
+        if (lngDiff > longitudeWindow) {
+          continue;
+        }
+
+        const direction = latLngToVector(point.lat, point.lng, 1).normalize();
+        const score = centerLocal.dot(direction);
+
+        if (score < 0.8) {
+          continue;
+        }
+
+        candidates.push({ point, score });
+      }
+
+      candidates.sort((left, right) => right.score - left.score || left.point.name.localeCompare(right.point.name));
+
+      for (const { point } of candidates.slice(0, maxLabels)) {
+        const label = this.createCountryDetailLabel(point, cameraDistance);
+        this.cityDetailRoot.add(label);
+        this.cityLabelObjects.push(label);
+      }
+
+      return;
+    }
+
+    if (!this.worldCities().length) {
+      return;
+    }
+
+    const latitudeWindow = THREE.MathUtils.mapLinear(cameraDistance, 2.3, 3.85, 4.5, 11);
     const longitudeWindow = latitudeWindow * 1.7;
-    const maxLabels = cameraDistance < 3.75 ? 20 : cameraDistance < 4.2 ? 12 : 7;
+    const maxLabels = cameraDistance < 2.85 ? 28 : cameraDistance < 3.25 ? 18 : 12;
     const candidates: Array<{ city: City; score: number }> = [];
 
     for (const city of this.worldCities()) {
@@ -1425,6 +1685,24 @@ export class App implements AfterViewInit, OnDestroy {
         break;
       }
     }
+  }
+
+  private createCountryDetailLabel(point: CountryLabelPoint, cameraDistance: number): THREE.Group {
+    const group = new THREE.Group();
+    const direction = latLngToVector(point.lat, point.lng, 1).normalize();
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.getCountryLabelTexture(point),
+        transparent: true,
+        depthWrite: false,
+        depthTest: false
+      })
+    );
+    sprite.position.copy(direction.multiplyScalar(1.33));
+    const scale = cameraDistance < 4.5 ? 0.32 : 0.24;
+    sprite.scale.set(scale * 2.2, scale * 0.45, 1);
+    group.add(sprite);
+    return group;
   }
 
   private createCityDetailLabel(city: City, cameraDistance: number): THREE.Group {
@@ -1506,6 +1784,38 @@ export class App implements AfterViewInit, OnDestroy {
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     this.labelTextureCache.set(city.id, texture);
+    return texture;
+  }
+
+  private getCountryLabelTexture(point: CountryLabelPoint): THREE.CanvasTexture {
+    const cacheKey = `country:${point.name}`;
+    const cached = this.labelTextureCache.get(cacheKey);
+
+    if (cached) {
+      return cached;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 112;
+    const ctx = canvas.getContext('2d')!;
+
+    ctx.fillStyle = 'rgba(5, 18, 32, 0.58)';
+    ctx.strokeStyle = 'rgba(246, 214, 134, 0.28)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(8, 8, canvas.width - 16, canvas.height - 16, 24);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#f8e7bd';
+    ctx.font = "600 34px 'Avenir Next', 'Trebuchet MS', sans-serif";
+    ctx.textAlign = 'center';
+    ctx.fillText(point.name.toUpperCase(), canvas.width / 2, 68);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    this.labelTextureCache.set(cacheKey, texture);
     return texture;
   }
 
@@ -1725,7 +2035,7 @@ export class App implements AfterViewInit, OnDestroy {
 
     if (this.countryBorderLines) {
       const material = this.countryBorderLines.material as THREE.LineBasicMaterial;
-      material.opacity = THREE.MathUtils.mapLinear(this.camera.position.length(), 6.4, 3.4, 0.12, 0.62);
+      material.opacity = THREE.MathUtils.mapLinear(this.camera.position.length(), 6.6, 2.3, 0.1, 0.64);
     }
 
     if (this.starField) {
