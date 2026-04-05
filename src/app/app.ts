@@ -695,7 +695,6 @@ export class App implements AfterViewInit, OnDestroy {
   private sunCorona?: THREE.Sprite;
   private sunLight?: THREE.DirectionalLight;
   private sunPointLight?: THREE.PointLight;
-  private moonOrbiter?: THREE.Group;
   private focusGroup?: THREE.Group;
   private tiltGroup?: THREE.Group;
   private markerRoot?: THREE.Group;
@@ -1176,9 +1175,10 @@ export class App implements AfterViewInit, OnDestroy {
       earthMaterial.bumpMap = detailedTexture.bump;
       earthMaterial.bumpScale = 0.03;
       earthMaterial.roughnessMap = detailedTexture.roughness;
-      earthMaterial.roughness = 0.98;
+      earthMaterial.roughness = 1;
       earthMaterial.clearcoat = 0.14;
-      earthMaterial.clearcoatRoughness = 0.85;
+      earthMaterial.clearcoatRoughness = 1;
+      earthMaterial.clearcoat = 0;
       earthMaterial.needsUpdate = true;
 
       if (this.countryBorderLines) {
@@ -1371,34 +1371,6 @@ export class App implements AfterViewInit, OnDestroy {
       })
     );
     this.scene.add(this.starField);
-
-    const orbitalRing = new THREE.Mesh(
-      new THREE.TorusGeometry(2.35, 0.008, 12, 180),
-      new THREE.MeshBasicMaterial({
-        color: '#5bc0ff',
-        transparent: true,
-        opacity: 0.18
-      })
-    );
-    orbitalRing.rotation.x = THREE.MathUtils.degToRad(70);
-    orbitalRing.rotation.y = THREE.MathUtils.degToRad(26);
-    this.scene.add(orbitalRing);
-
-    this.moonOrbiter = new THREE.Group();
-    this.moonOrbiter.rotation.x = orbitalRing.rotation.x;
-    this.moonOrbiter.rotation.y = orbitalRing.rotation.y;
-    const moon = new THREE.Mesh(
-      new THREE.SphereGeometry(0.07, 18, 18),
-      new THREE.MeshStandardMaterial({
-        color: '#f7fbff',
-        emissive: '#c7dcff',
-        emissiveIntensity: 0.28,
-        roughness: 0.9
-      })
-    );
-    moon.position.set(2.35, 0, 0);
-    this.moonOrbiter.add(moon);
-    this.scene.add(this.moonOrbiter);
   }
 
   private createGlobeObjects(): void {
@@ -1417,10 +1389,10 @@ export class App implements AfterViewInit, OnDestroy {
         emissiveMap: nightTexture,
         emissive: new THREE.Color('#1b2c42'),
         emissiveIntensity: 0.42,
-        roughness: 0.82,
-        metalness: 0.06,
-        clearcoat: 0.22,
-        clearcoatRoughness: 0.78
+        roughness: 1,
+        metalness: 0,
+        clearcoat: 0,
+        clearcoatRoughness: 1
       })
     );
 
@@ -1453,12 +1425,8 @@ export class App implements AfterViewInit, OnDestroy {
       return;
     }
 
-    this.scene.add(new THREE.AmbientLight('#16304d', 0.52));
-    this.scene.add(new THREE.HemisphereLight('#7fd2ff', '#050b13', 0.74));
-
-    const rimLight = new THREE.DirectionalLight('#65c8ff', 1.25);
-    rimLight.position.set(-4, 2.2, -3.8);
-    this.scene.add(rimLight);
+    this.scene.add(new THREE.AmbientLight('#1b1f28', 0.42));
+    this.scene.add(new THREE.HemisphereLight('#f0eadc', '#050b13', 0.42));
 
     this.sunLight = new THREE.DirectionalLight('#ffd889', 3.8);
     this.sunLight.position.set(4.6, 1.4, 4.4);
@@ -1537,14 +1505,14 @@ export class App implements AfterViewInit, OnDestroy {
       }
 
       const color =
-        snapshot.phase === 'day' ? '#ffbf54' : snapshot.phase === 'twilight' ? '#ff8b43' : '#64b5ff';
+        snapshot.phase === 'day' ? '#ffbf54' : snapshot.phase === 'twilight' ? '#ff9752' : '#ffd27a';
       const material = bundle.dot.material as THREE.MeshStandardMaterial;
       const haloMaterial = bundle.halo.material as THREE.MeshBasicMaterial;
       material.color.set(color);
       material.emissive.set(color);
       material.emissiveIntensity = 0.95;
       haloMaterial.color.set(color);
-      haloMaterial.opacity = snapshot.phase === 'night' ? 0.62 : 0.48;
+      haloMaterial.opacity = snapshot.phase === 'night' ? 0.42 : 0.48;
       bundle.group.scale.setScalar(1);
     });
   }
@@ -2289,10 +2257,6 @@ export class App implements AfterViewInit, OnDestroy {
     if (this.starField) {
       this.starField.rotation.y += 0.00008;
       this.starField.rotation.x += 0.00002;
-    }
-
-    if (this.moonOrbiter) {
-      this.moonOrbiter.rotation.z += 0.0036;
     }
 
     const pulse = 1 + Math.sin(performance.now() * 0.0022) * 0.06;
