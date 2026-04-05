@@ -950,6 +950,22 @@ export class App implements AfterViewInit, OnDestroy {
     this.hourOfDay.set(localDate.getUTCHours() * 60 + localDate.getUTCMinutes());
   }
 
+  private requiredFovForTargets(
+    cameraPosition: THREE.Vector3,
+    targetPoints: THREE.Vector3[],
+    marginDegrees = 6
+  ): number {
+    const forward = cameraPosition.clone().multiplyScalar(-1).normalize();
+    let maxAngle = 0;
+
+    for (const point of targetPoints) {
+      const ray = point.clone().sub(cameraPosition).normalize();
+      maxAngle = Math.max(maxAngle, forward.angleTo(ray));
+    }
+
+    return clamp(THREE.MathUtils.radToDeg(maxAngle) * 2 + marginDegrees, 34, 48);
+  }
+
   private planCameraForActiveCity(animate: boolean): void {
     if (!this.camera) {
       return;
@@ -961,7 +977,7 @@ export class App implements AfterViewInit, OnDestroy {
     const nextFocusY = -THREE.MathUtils.degToRad(activeCity.lng);
     const cityDirection = directionForLatLngWithFocus(activeCity.lat, activeCity.lng, nextFocusX, nextFocusY);
     const sunDirection = directionForLatLngWithFocus(subsolar.lat, subsolar.lng, nextFocusX, nextFocusY);
-    const framingDirection = cityDirection.clone().multiplyScalar(1.72).add(sunDirection.clone().multiplyScalar(0.88));
+    const framingDirection = cityDirection.clone().multiplyScalar(1.42).add(sunDirection.clone().multiplyScalar(1.12));
 
     if (framingDirection.lengthSq() < 0.0001) {
       framingDirection.copy(cityDirection);
@@ -969,18 +985,24 @@ export class App implements AfterViewInit, OnDestroy {
 
     framingDirection.normalize();
 
-    if (framingDirection.dot(cityDirection) < 0.82) {
-      framingDirection.lerp(cityDirection, 0.58).normalize();
+    if (framingDirection.dot(cityDirection) < 0.72) {
+      framingDirection.lerp(cityDirection, 0.42).normalize();
     }
 
     const angularSeparation = Math.acos(clamp(cityDirection.dot(sunDirection), -1, 1));
-    const distance = clamp(4.3 + angularSeparation * 0.7, 4.45, 5.95);
-    const verticalBias = new THREE.Vector3(0, 0.12, 0);
+    const distance = clamp(5.45 + angularSeparation * 1.28, 5.75, 7.8);
+    const verticalBias = new THREE.Vector3(0, 0.16, 0);
     const desiredPosition = framingDirection.clone().multiplyScalar(distance).add(verticalBias);
+    const desiredFov = this.requiredFovForTargets(desiredPosition, [
+      cityDirection.clone().multiplyScalar(1.28),
+      sunDirection.clone().multiplyScalar(5)
+    ]);
 
     this.targetFocusX = nextFocusX;
     this.targetFocusY = nextFocusY;
     this.desiredCameraPosition.copy(desiredPosition);
+    this.camera.fov = desiredFov;
+    this.camera.updateProjectionMatrix();
 
     if (!animate) {
       this.currentFocusX = nextFocusX;
@@ -1003,7 +1025,7 @@ export class App implements AfterViewInit, OnDestroy {
       this.scene = new THREE.Scene();
       this.scene.fog = new THREE.FogExp2('#04111f', 0.028);
 
-      this.camera = new THREE.PerspectiveCamera(34, width / height, 0.1, 120);
+      this.camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 120);
       this.camera.position.set(0, 0.2, 5.1);
 
       this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
