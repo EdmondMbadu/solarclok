@@ -450,10 +450,11 @@ button {
   content: '';
   position: absolute;
   left: 50%;
-  bottom: -0.92rem;
+  bottom: -24px;
   width: 1px;
-  height: 0.92rem;
-  background: linear-gradient(180deg, rgba(193, 226, 255, 0.54), rgba(193, 226, 255, 0));
+  height: 24px;
+  background: linear-gradient(180deg, rgba(232, 244, 255, 0.96), rgba(187, 221, 248, 0.52));
+  box-shadow: 0 0 2px rgba(160, 212, 255, 0.14);
   transform: translateX(-50%);
 }
 
