@@ -97,6 +97,10 @@ button {
   padding: 0.2rem 0.2rem 0.5rem;
 }
 
+.brand__copy {
+  min-width: 0;
+}
+
 .brand h1,
 .stage__copy h2,
 .modal h2,
@@ -131,6 +135,45 @@ button {
   height: 2.15rem;
   border: 1px dashed rgba(255, 210, 131, 0.32);
   border-radius: 50%;
+}
+
+.brand__action {
+  margin-left: auto;
+  width: 2.65rem;
+  height: 2.65rem;
+  border: 1px solid rgba(255, 196, 91, 0.26);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 239, 198, 0.18), transparent 45%),
+    linear-gradient(180deg, rgba(19, 37, 59, 0.94), rgba(9, 21, 38, 0.88));
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.02) inset,
+    0 16px 30px rgba(0, 0, 0, 0.24);
+  color: var(--gold);
+  cursor: pointer;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease;
+}
+
+.brand__action span {
+  display: block;
+  font-size: 1.45rem;
+  line-height: 1;
+  transform: translateY(-0.03rem);
+}
+
+.brand__action:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 196, 91, 0.46);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+    0 18px 34px rgba(255, 157, 69, 0.16);
+  color: #ffe0a3;
 }
 
 .eyebrow,
