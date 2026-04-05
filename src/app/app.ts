@@ -1565,7 +1565,11 @@ export class App implements AfterViewInit, OnDestroy {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
+    // Three.js sphere UVs place Greenwich 90 degrees away from our globe math, so align all generated
+    // Earth textures to the same longitude system used by markers, borders, and sun targeting.
+    texture.offset.x = 0.25;
     texture.anisotropy = this.renderer?.capabilities.getMaxAnisotropy?.() ?? 1;
+    texture.needsUpdate = true;
     return texture;
   }
 
@@ -1679,11 +1683,7 @@ export class App implements AfterViewInit, OnDestroy {
     ctx.ellipse(canvas.width * 0.5, canvas.height * 0.92, canvas.width * 0.24, canvas.height * 0.05, 0, 0, TAU);
     ctx.fill();
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    return texture;
+    return this.canvasToTexture(canvas);
   }
 
   private createNightTexture(): THREE.CanvasTexture {
@@ -1734,9 +1734,7 @@ export class App implements AfterViewInit, OnDestroy {
       }
     });
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    return texture;
+    return this.canvasToTexture(canvas);
   }
 
   private createCloudTexture(): THREE.CanvasTexture {
@@ -1762,11 +1760,7 @@ export class App implements AfterViewInit, OnDestroy {
       ctx.restore();
     }
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    return texture;
+    return this.canvasToTexture(canvas);
   }
 
   private paintBlob(
