@@ -449,6 +449,8 @@ export class App implements AfterViewInit, OnDestroy {
   protected readonly isModalOpen = signal(false);
   protected readonly isPlaying = signal(false);
   protected readonly isLiveMode = signal(true);
+  protected readonly isLeftPanelOpen = signal(false);
+  protected readonly isRightPanelOpen = signal(false);
   protected readonly selectedCities = signal(DEFAULT_CITIES);
   protected readonly activeCityIndex = signal(0);
   protected readonly worldCities = signal<City[]>([]);
@@ -662,6 +664,14 @@ export class App implements AfterViewInit, OnDestroy {
     this.playbackTimer = window.setInterval(() => {
       this.shiftTimeline(8);
     }, 120);
+  }
+
+  protected toggleLeftPanel(): void {
+    this.isLeftPanelOpen.update((open) => !open);
+  }
+
+  protected toggleRightPanel(): void {
+    this.isRightPanelOpen.update((open) => !open);
   }
 
   protected jumpToLive(): void {

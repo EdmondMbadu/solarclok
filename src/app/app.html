@@ -1,5 +1,9 @@
-<main class="solarclock-shell">
-  <aside class="panel panel--left">
+<main
+  class="solarclock-shell"
+  [class.solarclock-shell--left-open]="isLeftPanelOpen()"
+  [class.solarclock-shell--right-open]="isRightPanelOpen()"
+>
+  <aside id="left-panel" class="panel panel--left" [class.panel--open]="isLeftPanelOpen()">
     <div class="brand">
       <div class="brand__mark">
         <span></span>
@@ -91,6 +95,32 @@
     <div class="stage__glow stage__glow--a"></div>
     <div class="stage__glow stage__glow--b"></div>
 
+    <button
+      type="button"
+      class="sidebar-toggle sidebar-toggle--left"
+      [class.sidebar-toggle--active]="isLeftPanelOpen()"
+      (click)="toggleLeftPanel()"
+      [attr.aria-expanded]="isLeftPanelOpen()"
+      aria-controls="left-panel"
+      [attr.title]="isLeftPanelOpen() ? 'Hide city details' : 'Show city details'"
+    >
+      <span class="sidebar-toggle__icon">{{ isLeftPanelOpen() ? '‹' : '›' }}</span>
+      <span class="sidebar-toggle__label">City details</span>
+    </button>
+
+    <button
+      type="button"
+      class="sidebar-toggle sidebar-toggle--right"
+      [class.sidebar-toggle--active]="isRightPanelOpen()"
+      (click)="toggleRightPanel()"
+      [attr.aria-expanded]="isRightPanelOpen()"
+      aria-controls="right-panel"
+      [attr.title]="isRightPanelOpen() ? 'Hide solar panels' : 'Show solar panels'"
+    >
+      <span class="sidebar-toggle__icon">{{ isRightPanelOpen() ? '›' : '‹' }}</span>
+      <span class="sidebar-toggle__label">Solar panels</span>
+    </button>
+
     <div class="stage__hud">
       <div class="hud-chip">
         <span class="hud-chip__label">Subsolar point</span>
@@ -123,7 +153,7 @@
     </div>
   </section>
 
-  <aside class="panel panel--right">
+  <aside id="right-panel" class="panel panel--right" [class.panel--open]="isRightPanelOpen()">
     <section class="panel-card">
       <div class="panel-card__head">
         <p class="panel-card__label">Day / night envelope</p>
@@ -185,6 +215,29 @@
     </section>
   </aside>
 
+  <section class="city-rail">
+    @for (snapshot of citySnapshots(); track trackByCity($index, snapshot); let i = $index) {
+      <button
+        type="button"
+        class="city-card {{ phaseClass(snapshot) }}"
+        [class.city-card--active]="i === activeCityIndex()"
+        (click)="selectCity(i)"
+      >
+        <span class="city-card__remove" (click)="removeCity(i, $event)">×</span>
+        <span class="city-card__meta">{{ phaseLabel(snapshot) }}</span>
+        <strong>{{ snapshot.city.name }}</strong>
+        <span class="city-card__time">{{ formatCardTime(snapshot) }}</span>
+        <span class="city-card__day">{{ formatCardDay(snapshot) }}</span>
+      </button>
+    }
+
+    <button type="button" class="city-card city-card--add" (click)="openCityModal()">
+      <span>+</span>
+      <strong>Add city</strong>
+      <small>Expand the rail</small>
+    </button>
+  </section>
+
   <section class="transport">
     <button class="transport__play" type="button" (click)="togglePlayback()">
       @if (isPlaying()) {
@@ -245,29 +298,6 @@
         {{ isLiveMode() ? 'Live now' : 'Return to live' }}
       </button>
     </div>
-  </section>
-
-  <section class="city-rail">
-    @for (snapshot of citySnapshots(); track trackByCity($index, snapshot); let i = $index) {
-      <button
-        type="button"
-        class="city-card {{ phaseClass(snapshot) }}"
-        [class.city-card--active]="i === activeCityIndex()"
-        (click)="selectCity(i)"
-      >
-        <span class="city-card__remove" (click)="removeCity(i, $event)">×</span>
-        <span class="city-card__meta">{{ phaseLabel(snapshot) }}</span>
-        <strong>{{ snapshot.city.name }}</strong>
-        <span class="city-card__time">{{ formatCardTime(snapshot) }}</span>
-        <span class="city-card__day">{{ formatCardDay(snapshot) }}</span>
-      </button>
-    }
-
-    <button type="button" class="city-card city-card--add" (click)="openCityModal()">
-      <span>+</span>
-      <strong>Add city</strong>
-      <small>Expand the rail</small>
-    </button>
   </section>
 </main>
 
