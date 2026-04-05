@@ -50,9 +50,7 @@ interface CitySnapshot {
 
 interface MarkerBundle {
   group: THREE.Group;
-  beam: THREE.Mesh;
   dot: THREE.Mesh;
-  ring: THREE.Mesh;
 }
 
 type WorldCityRow = [number, string, number, number, string, string];
@@ -572,29 +570,24 @@ export class App implements AfterViewInit, OnDestroy {
   private starField?: THREE.Points;
   private sunMesh?: THREE.Mesh;
   private sunHalo?: THREE.Mesh;
+  private sunCorona?: THREE.Mesh;
   private sunLight?: THREE.DirectionalLight;
+  private sunPointLight?: THREE.PointLight;
   private moonOrbiter?: THREE.Group;
   private focusGroup?: THREE.Group;
   private tiltGroup?: THREE.Group;
   private markerRoot?: THREE.Group;
-  private cityDetailRoot?: THREE.Group;
   private currentFocusX = 0;
   private currentFocusY = 0;
   private targetFocusX = 0;
   private targetFocusY = 0;
   private readonly markerBundles = new Map<string, MarkerBundle>();
-  private readonly cityLabelObjects: THREE.Object3D[] = [];
-  private readonly labelTextureCache = new Map<string, THREE.CanvasTexture>();
   private readonly tempVector = new THREE.Vector3();
-  private countryLabelPoints: CountryLabelPoint[] = [];
-  private detailRefreshTimer?: number;
-  private frameCount = 0;
 
   private readonly syncSceneEffect = effect(() => {
     const activeCity = this.activeCity();
     const markers = this.citySnapshots();
     const subsolarPoint = this.subsolarPoint();
-    this.worldCities().length;
 
     if (!this.sceneReady) {
       return;
@@ -604,7 +597,6 @@ export class App implements AfterViewInit, OnDestroy {
     this.targetFocusY = -THREE.MathUtils.degToRad(activeCity.lng);
     this.targetFocusX = THREE.MathUtils.degToRad(clamp(activeCity.lat * 0.68, -48, 48));
     this.updateSunTarget(subsolarPoint.lat, subsolarPoint.lng);
-    this.scheduleCityDetailRefresh();
   });
 
   protected trackByCity(_: number, snapshot: CitySnapshot): string {
@@ -772,11 +764,6 @@ export class App implements AfterViewInit, OnDestroy {
     this.controls?.dispose();
     this.composer?.dispose();
     this.renderer?.dispose();
-    this.clearCityDetailLabels();
-
-    if (this.detailRefreshTimer) {
-      clearTimeout(this.detailRefreshTimer);
-    }
 
     this.markerBundles.forEach(({ group }) => {
       group.traverse((object: THREE.Object3D) => {
@@ -790,9 +777,6 @@ export class App implements AfterViewInit, OnDestroy {
         }
       });
     });
-
-    this.labelTextureCache.forEach((texture) => texture.dispose());
-    this.labelTextureCache.clear();
   }
 
   private stopPlayback(): void {
@@ -807,20 +791,6 @@ export class App implements AfterViewInit, OnDestroy {
   private shiftTimeline(deltaMinutes: number): void {
     const nextUtcMs = this.referenceUtcMs() + deltaMinutes * MINUTE_MS;
     this.reanchorMoment(nextUtcMs, this.activeCity());
-  }
-
-  private scheduleCityDetailRefresh(): void {
-    if (!this.isBrowser) {
-      return;
-    }
-
-    if (this.detailRefreshTimer) {
-      clearTimeout(this.detailRefreshTimer);
-    }
-
-    this.detailRefreshTimer = window.setTimeout(() => {
-      this.refreshCityDetailLabels();
-    }, 60);
   }
 
   private async ensureWorldCatalogLoaded(): Promise<void> {
@@ -845,7 +815,6 @@ export class App implements AfterViewInit, OnDestroy {
 
       this.worldCities.set(cities);
       this.cityCatalogStatus.set('ready');
-      this.scheduleCityDetailRefresh();
     } catch {
       this.cityCatalogStatus.set('error');
     }
@@ -875,10 +844,6 @@ export class App implements AfterViewInit, OnDestroy {
         (left, right) => left !== right
       ) as unknown as GeoMultiLineString;
 
-      this.countryLabelPoints = countries.features
-        .map((feature) => this.computeCountryLabelPoint(feature))
-        .filter((point): point is CountryLabelPoint => point !== null);
-
       const detailedTexture = this.createDetailedEarthTexture(countries.features);
       const earthMaterial = this.earthSphere.material as THREE.MeshPhysicalMaterial;
       earthMaterial.map = detailedTexture.color;
@@ -898,7 +863,6 @@ export class App implements AfterViewInit, OnDestroy {
 
       this.countryBorderLines = this.createCountryBorderLines(borders);
       this.tiltGroup.add(this.countryBorderLines);
-      this.scheduleCityDetailRefresh();
     } catch {
       return;
     }
@@ -939,17 +903,16 @@ export class App implements AfterViewInit, OnDestroy {
       this.controls.enablePan = false;
       this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.05;
-      this.controls.minDistance = 2.3;
-      this.controls.maxDistance = 6.6;
+      this.controls.minDistance = 1.85;
+      this.controls.maxDistance = 8.2;
       this.controls.target.set(0, 0, 0);
 
       this.focusGroup = new THREE.Group();
       this.tiltGroup = new THREE.Group();
       this.markerRoot = new THREE.Group();
-      this.cityDetailRoot = new THREE.Group();
       this.focusGroup.add(this.tiltGroup);
       this.tiltGroup.rotation.z = EARTH_TILT;
-      this.tiltGroup.add(this.markerRoot, this.cityDetailRoot);
+      this.tiltGroup.add(this.markerRoot);
       this.scene.add(this.focusGroup);
 
       this.createBackdropObjects();
@@ -959,7 +922,6 @@ export class App implements AfterViewInit, OnDestroy {
 
       this.resizeObserver = new ResizeObserver(() => this.handleResize(host));
       this.resizeObserver.observe(host);
-      this.controls.addEventListener('change', () => this.scheduleCityDetailRefresh());
 
       this.sceneReady = true;
       this.syncMarkers(this.citySnapshots(), this.activeCity().id);
@@ -1101,9 +1063,12 @@ export class App implements AfterViewInit, OnDestroy {
     rimLight.position.set(-4, 2.2, -3.8);
     this.scene.add(rimLight);
 
-    this.sunLight = new THREE.DirectionalLight('#ffd889', 2.9);
+    this.sunLight = new THREE.DirectionalLight('#ffd889', 3.8);
     this.sunLight.position.set(4.6, 1.4, 4.4);
     this.scene.add(this.sunLight);
+    this.sunPointLight = new THREE.PointLight('#ffcf78', 10, 26, 1.6);
+    this.sunPointLight.position.set(4.6, 1.4, 4.4);
+    this.scene.add(this.sunPointLight);
 
     this.sunMesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.23, 32, 32),
@@ -1114,12 +1079,21 @@ export class App implements AfterViewInit, OnDestroy {
       new THREE.MeshBasicMaterial({
         color: '#ffd37a',
         transparent: true,
-        opacity: 0.2,
+        opacity: 0.34,
+        blending: THREE.AdditiveBlending
+      })
+    );
+    this.sunCorona = new THREE.Mesh(
+      new THREE.SphereGeometry(0.72, 32, 32),
+      new THREE.MeshBasicMaterial({
+        color: '#ffbc63',
+        transparent: true,
+        opacity: 0.12,
         blending: THREE.AdditiveBlending
       })
     );
 
-    this.scene.add(this.sunMesh, this.sunHalo);
+    this.scene.add(this.sunMesh, this.sunHalo, this.sunCorona);
   }
 
   private createMarkers(): void {
@@ -1131,7 +1105,7 @@ export class App implements AfterViewInit, OnDestroy {
       return;
     }
 
-    const expectedIds = new Set(snapshots.map((snapshot) => snapshot.city.id));
+    const expectedIds = new Set([activeCityId]);
 
     this.markerBundles.forEach((bundle, cityId) => {
       if (expectedIds.has(cityId)) {
@@ -1143,7 +1117,11 @@ export class App implements AfterViewInit, OnDestroy {
       this.markerBundles.delete(cityId);
     });
 
-    snapshots.forEach((snapshot, index) => {
+    snapshots.forEach((snapshot) => {
+      if (snapshot.city.id !== activeCityId) {
+        return;
+      }
+
       let bundle = this.markerBundles.get(snapshot.city.id);
 
       if (!bundle) {
@@ -1152,25 +1130,13 @@ export class App implements AfterViewInit, OnDestroy {
         this.markerRoot?.add(bundle.group);
       }
 
-      const active = snapshot.city.id === activeCityId;
       const color =
         snapshot.phase === 'day' ? '#ffbf54' : snapshot.phase === 'twilight' ? '#ff8b43' : '#64b5ff';
-      const scale = active ? 1.18 : 0.8 + index * 0.02;
-      const opacity = active ? 1 : 0.72;
       const material = bundle.dot.material as THREE.MeshStandardMaterial;
-      const ringMaterial = bundle.ring.material as THREE.MeshBasicMaterial;
-      const beamMaterial = bundle.beam.material as THREE.MeshBasicMaterial;
       material.color.set(color);
       material.emissive.set(color);
-      material.emissiveIntensity = active ? 1 : 0.45;
-      ringMaterial.color.set(color);
-      ringMaterial.opacity = active ? 0.95 : 0.4;
-      beamMaterial.color.set(color);
-      beamMaterial.opacity = active ? 0.75 : 0.28;
-      bundle.group.scale.setScalar(scale);
-      bundle.group.userData['pulseSeed'] = index + 1;
-      bundle.group.userData['active'] = active;
-      bundle.dot.visible = opacity > 0;
+      material.emissiveIntensity = 1.1;
+      bundle.group.scale.setScalar(1);
     });
   }
 
@@ -1180,37 +1146,19 @@ export class App implements AfterViewInit, OnDestroy {
     group.position.copy(outward);
     group.lookAt(outward.clone().multiplyScalar(2));
 
-    const beam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.01, 0.022, 0.18, 14),
-      new THREE.MeshBasicMaterial({ color: '#ffbf54', transparent: true, opacity: 0.7 })
-    );
-    beam.rotation.x = Math.PI / 2;
-    beam.position.z = 0.09;
-
     const dot = new THREE.Mesh(
-      new THREE.SphereGeometry(0.042, 18, 18),
+      new THREE.SphereGeometry(0.03, 18, 18),
       new THREE.MeshStandardMaterial({
         color: '#ffbf54',
         emissive: '#ffbf54',
-        emissiveIntensity: 0.9,
-        roughness: 0.3
+        emissiveIntensity: 1,
+        roughness: 0.25
       })
     );
-    dot.position.z = 0.18;
+    dot.position.z = 0.04;
 
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(0.1, 0.006, 10, 40),
-      new THREE.MeshBasicMaterial({
-        color: '#ffbf54',
-        transparent: true,
-        opacity: 0.85
-      })
-    );
-    ring.rotation.x = Math.PI / 2;
-    ring.position.z = 0.12;
-
-    group.add(beam, dot, ring);
-    return { group, beam, dot, ring };
+    group.add(dot);
+    return { group, dot };
   }
 
   private disposeMarker(bundle: MarkerBundle): void {
@@ -1553,272 +1501,6 @@ export class App implements AfterViewInit, OnDestroy {
     return new THREE.LineSegments(geometry, material);
   }
 
-  private clearCityDetailLabels(): void {
-    if (!this.cityDetailRoot) {
-      return;
-    }
-
-    for (const object of this.cityLabelObjects) {
-      this.cityDetailRoot.remove(object);
-      object.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        mesh.geometry?.dispose?.();
-
-        const material = (child as THREE.Sprite | THREE.Mesh | THREE.Line).material;
-
-        if (Array.isArray(material)) {
-          material.forEach((entry) => entry.dispose());
-        } else {
-          material?.dispose?.();
-        }
-      });
-    }
-
-    this.cityLabelObjects.length = 0;
-  }
-
-  private refreshCityDetailLabels(): void {
-    if (!this.cityDetailRoot || !this.camera || !this.tiltGroup) {
-      return;
-    }
-
-    this.clearCityDetailLabels();
-
-    const cameraDistance = this.camera.position.length();
-    if (cameraDistance > 5.6) {
-      return;
-    }
-
-    const centerWorld = this.camera.position.clone().normalize().multiplyScalar(1.2);
-    const centerLocal = this.tiltGroup.worldToLocal(centerWorld).normalize();
-    const centerLat = THREE.MathUtils.radToDeg(Math.asin(centerLocal.y));
-    const centerLng = THREE.MathUtils.radToDeg(Math.atan2(centerLocal.x, centerLocal.z));
-    const countryMode = cameraDistance > 3.85;
-
-    if (countryMode) {
-      const latitudeWindow = THREE.MathUtils.mapLinear(cameraDistance, 3.85, 5.6, 10, 24);
-      const longitudeWindow = latitudeWindow * 1.9;
-      const maxLabels = cameraDistance < 4.55 ? 8 : 5;
-      const candidates: Array<{ point: CountryLabelPoint; score: number }> = [];
-
-      for (const point of this.countryLabelPoints) {
-        if (Math.abs(point.lat - centerLat) > latitudeWindow) {
-          continue;
-        }
-
-        const lngDiff = Math.abs(normalizeLongitude(point.lng - centerLng));
-        if (lngDiff > longitudeWindow) {
-          continue;
-        }
-
-        const direction = latLngToVector(point.lat, point.lng, 1).normalize();
-        const score = centerLocal.dot(direction);
-
-        if (score < 0.8) {
-          continue;
-        }
-
-        candidates.push({ point, score });
-      }
-
-      candidates.sort((left, right) => right.score - left.score || left.point.name.localeCompare(right.point.name));
-
-      for (const { point } of candidates.slice(0, maxLabels)) {
-        const label = this.createCountryDetailLabel(point, cameraDistance);
-        this.cityDetailRoot.add(label);
-        this.cityLabelObjects.push(label);
-      }
-
-      return;
-    }
-
-    if (!this.worldCities().length) {
-      return;
-    }
-
-    const latitudeWindow = THREE.MathUtils.mapLinear(cameraDistance, 2.3, 3.85, 4.5, 11);
-    const longitudeWindow = latitudeWindow * 1.7;
-    const maxLabels = cameraDistance < 2.85 ? 28 : cameraDistance < 3.25 ? 18 : 12;
-    const candidates: Array<{ city: City; score: number }> = [];
-
-    for (const city of this.worldCities()) {
-      if (Math.abs(city.lat - centerLat) > latitudeWindow) {
-        continue;
-      }
-
-      const lngDiff = Math.abs(normalizeLongitude(city.lng - centerLng));
-      if (lngDiff > longitudeWindow) {
-        continue;
-      }
-
-      const direction = latLngToVector(city.lat, city.lng, 1).normalize();
-      const score = centerLocal.dot(direction);
-
-      if (score < 0.86) {
-        continue;
-      }
-
-      candidates.push({ city, score });
-    }
-
-    candidates.sort(
-      (left, right) =>
-        right.score - left.score ||
-        left.city.name.localeCompare(right.city.name) ||
-        left.city.country.localeCompare(right.city.country)
-    );
-
-    const usedCells = new Set<string>();
-    for (const { city } of candidates) {
-      const cell = `${Math.round(city.lat * 2)}:${Math.round(city.lng * 2)}`;
-
-      if (usedCells.has(cell)) {
-        continue;
-      }
-
-      usedCells.add(cell);
-      const label = this.createCityDetailLabel(city, cameraDistance);
-      this.cityDetailRoot.add(label);
-      this.cityLabelObjects.push(label);
-
-      if (this.cityLabelObjects.length >= maxLabels) {
-        break;
-      }
-    }
-  }
-
-  private createCountryDetailLabel(point: CountryLabelPoint, cameraDistance: number): THREE.Group {
-    const group = new THREE.Group();
-    const direction = latLngToVector(point.lat, point.lng, 1).normalize();
-    const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: this.getCountryLabelTexture(point),
-        transparent: true,
-        depthWrite: false,
-        depthTest: false
-      })
-    );
-    sprite.position.copy(direction.multiplyScalar(1.33));
-    const scale = cameraDistance < 4.5 ? 0.32 : 0.24;
-    sprite.scale.set(scale * 2.2, scale * 0.45, 1);
-    group.add(sprite);
-    return group;
-  }
-
-  private createCityDetailLabel(city: City, cameraDistance: number): THREE.Group {
-    const group = new THREE.Group();
-    const direction = latLngToVector(city.lat, city.lng, 1).normalize();
-    const dotPosition = direction.clone().multiplyScalar(1.222);
-    const labelPosition = direction.clone().multiplyScalar(1.31);
-    const dotSize = cameraDistance < 3.8 ? 0.012 : 0.009;
-    const labelScale = cameraDistance < 3.8 ? 0.22 : 0.16;
-
-    const stemGeometry = new THREE.BufferGeometry().setFromPoints([
-      direction.clone().multiplyScalar(1.228),
-      direction.clone().multiplyScalar(1.292)
-    ]);
-    const stem = new THREE.Line(
-      stemGeometry,
-      new THREE.LineBasicMaterial({
-        color: '#d5edff',
-        transparent: true,
-        opacity: 0.55,
-        depthWrite: false
-      })
-    );
-
-    const dot = new THREE.Mesh(
-      new THREE.SphereGeometry(dotSize, 8, 8),
-      new THREE.MeshBasicMaterial({
-        color: '#f8fbff',
-        transparent: true,
-        opacity: 0.92
-      })
-    );
-    dot.position.copy(dotPosition);
-
-    const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: this.getCityLabelTexture(city),
-        transparent: true,
-        depthWrite: false,
-        depthTest: false
-      })
-    );
-    sprite.position.copy(labelPosition);
-    sprite.scale.set(labelScale * 1.9, labelScale * 0.54, 1);
-
-    group.add(stem, dot, sprite);
-    return group;
-  }
-
-  private getCityLabelTexture(city: City): THREE.CanvasTexture {
-    const cached = this.labelTextureCache.get(city.id);
-
-    if (cached) {
-      return cached;
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 144;
-    const ctx = canvas.getContext('2d')!;
-
-    ctx.fillStyle = 'rgba(4, 15, 28, 0.82)';
-    ctx.strokeStyle = 'rgba(151, 213, 255, 0.34)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 28);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#f7fbff';
-    ctx.font = "600 42px 'Avenir Next', 'Trebuchet MS', sans-serif";
-    ctx.fillText(city.name, 28, 62);
-
-    ctx.fillStyle = 'rgba(205, 228, 248, 0.9)';
-    ctx.font = "500 26px 'Avenir Next', 'Trebuchet MS', sans-serif";
-    const suffix = city.admin1 ? `${city.admin1}, ${city.country}` : city.country;
-    ctx.fillText(suffix, 28, 104);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    this.labelTextureCache.set(city.id, texture);
-    return texture;
-  }
-
-  private getCountryLabelTexture(point: CountryLabelPoint): THREE.CanvasTexture {
-    const cacheKey = `country:${point.name}`;
-    const cached = this.labelTextureCache.get(cacheKey);
-
-    if (cached) {
-      return cached;
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 112;
-    const ctx = canvas.getContext('2d')!;
-
-    ctx.fillStyle = 'rgba(5, 18, 32, 0.58)';
-    ctx.strokeStyle = 'rgba(246, 214, 134, 0.28)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.roundRect(8, 8, canvas.width - 16, canvas.height - 16, 24);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#f8e7bd';
-    ctx.font = "600 34px 'Avenir Next', 'Trebuchet MS', sans-serif";
-    ctx.textAlign = 'center';
-    ctx.fillText(point.name.toUpperCase(), canvas.width / 2, 68);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    this.labelTextureCache.set(cacheKey, texture);
-    return texture;
-  }
-
   private createEarthSurfaceTexture(): THREE.CanvasTexture {
     const canvas = document.createElement('canvas');
     canvas.width = 2048;
@@ -1999,15 +1681,24 @@ export class App implements AfterViewInit, OnDestroy {
   }
 
   private updateSunTarget(subsolarLat: number, subsolarLng: number): void {
-    if (!this.tiltGroup || !this.sunLight || !this.sunMesh || !this.sunHalo) {
+    if (
+      !this.tiltGroup ||
+      !this.sunLight ||
+      !this.sunMesh ||
+      !this.sunHalo ||
+      !this.sunCorona ||
+      !this.sunPointLight
+    ) {
       return;
     }
 
     this.tempVector.copy(latLngToVector(subsolarLat, subsolarLng, 5));
     this.tiltGroup.localToWorld(this.tempVector);
     this.sunLight.position.lerp(this.tempVector, 0.35);
+    this.sunPointLight.position.lerp(this.tempVector, 0.35);
     this.sunMesh.position.lerp(this.tempVector, 0.35);
     this.sunHalo.position.lerp(this.tempVector, 0.35);
+    this.sunCorona.position.lerp(this.tempVector, 0.35);
   }
 
   private animate = (): void => {
@@ -2049,23 +1740,20 @@ export class App implements AfterViewInit, OnDestroy {
 
     const pulse = 1 + Math.sin(performance.now() * 0.0022) * 0.06;
     if (this.sunHalo) {
-      this.sunHalo.scale.setScalar(pulse);
+      this.sunHalo.scale.setScalar(pulse * 1.18);
     }
 
-    this.frameCount += 1;
-    if (
-      this.frameCount % 10 === 0 &&
-      (Math.abs(this.currentFocusX - this.targetFocusX) > 0.001 ||
-        Math.abs(this.currentFocusY - this.targetFocusY) > 0.001)
-    ) {
-      this.refreshCityDetailLabels();
+    if (this.sunCorona) {
+      this.sunCorona.scale.setScalar(1.35 + Math.sin(performance.now() * 0.0015) * 0.08);
+    }
+
+    if (this.sunPointLight) {
+      this.sunPointLight.intensity = 10.5 + Math.sin(performance.now() * 0.0018) * 0.8;
     }
 
     this.markerBundles.forEach((bundle) => {
-      const seed = bundle.group.userData['pulseSeed'] as number;
-      const active = bundle.group.userData['active'] as boolean;
-      const ringScale = active ? 1 + Math.sin(performance.now() * 0.003 + seed) * 0.08 : 1;
-      bundle.ring.scale.setScalar(ringScale);
+      const scale = 1 + Math.sin(performance.now() * 0.0032) * 0.08;
+      bundle.dot.scale.setScalar(scale);
     });
 
     this.controls?.update();
