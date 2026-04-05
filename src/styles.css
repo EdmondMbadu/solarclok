@@ -138,6 +138,7 @@ button {
 }
 
 .brand__action {
+  position: relative;
   margin-left: auto;
   width: 2.65rem;
   height: 2.65rem;
@@ -174,6 +175,34 @@ button {
     0 0 0 1px rgba(255, 255, 255, 0.03) inset,
     0 18px 34px rgba(255, 157, 69, 0.16);
   color: #ffe0a3;
+}
+
+.brand__action::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 0.7rem);
+  right: 0;
+  padding: 0.48rem 0.68rem;
+  border-radius: 0.72rem;
+  background: rgba(7, 18, 31, 0.94);
+  border: 1px solid rgba(171, 214, 255, 0.14);
+  color: var(--text-main);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.24);
+  opacity: 0;
+  transform: translateY(-0.3rem);
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.brand__action:hover::after,
+.brand__action:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .eyebrow,
