@@ -2121,7 +2121,7 @@ export class App implements AfterViewInit, OnDestroy {
       y < height + 40;
 
     overlay.style.opacity = visible ? '1' : '0';
-    overlay.style.transform = `translate3d(${Math.round(x + 18)}px, ${Math.round(y - 18)}px, 0)`;
+    overlay.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y - 24)}px, 0) translate(-50%, -100%)`;
   }
 
   private updateSunTarget(subsolarLat: number, subsolarLng: number): void {
