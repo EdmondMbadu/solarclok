@@ -51,6 +51,7 @@ interface CitySnapshot {
 interface MarkerBundle {
   group: THREE.Group;
   dot: THREE.Mesh;
+  halo: THREE.Mesh;
 }
 
 type WorldCityRow = [number, string, number, number, string, string];
@@ -1280,9 +1281,12 @@ export class App implements AfterViewInit, OnDestroy {
       const color =
         snapshot.phase === 'day' ? '#ffbf54' : snapshot.phase === 'twilight' ? '#ff8b43' : '#64b5ff';
       const material = bundle.dot.material as THREE.MeshStandardMaterial;
+      const haloMaterial = bundle.halo.material as THREE.MeshBasicMaterial;
       material.color.set(color);
       material.emissive.set(color);
-      material.emissiveIntensity = 1.1;
+      material.emissiveIntensity = 0.95;
+      haloMaterial.color.set(color);
+      haloMaterial.opacity = snapshot.phase === 'night' ? 0.62 : 0.48;
       bundle.group.scale.setScalar(1);
     });
   }
@@ -1293,19 +1297,31 @@ export class App implements AfterViewInit, OnDestroy {
     group.position.copy(outward);
     group.lookAt(outward.clone().multiplyScalar(2));
 
+    const halo = new THREE.Mesh(
+      new THREE.RingGeometry(0.014, 0.029, 32),
+      new THREE.MeshBasicMaterial({
+        color: '#ffcf70',
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending
+      })
+    );
+    halo.position.z = 0.012;
+
     const dot = new THREE.Mesh(
-      new THREE.SphereGeometry(0.048, 22, 22),
+      new THREE.SphereGeometry(0.018, 16, 16),
       new THREE.MeshStandardMaterial({
         color: '#ffbf54',
         emissive: '#ffbf54',
-        emissiveIntensity: 1.35,
-        roughness: 0.18
+        emissiveIntensity: 1.1,
+        roughness: 0.28
       })
     );
-    dot.position.z = 0.06;
+    dot.position.z = 0.02;
 
-    group.add(dot);
-    return { group, dot };
+    group.add(halo, dot);
+    return { group, dot, halo };
   }
 
   private disposeMarker(bundle: MarkerBundle): void {
@@ -1940,8 +1956,9 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     this.markerBundles.forEach((bundle) => {
-      const scale = 1 + Math.sin(performance.now() * 0.0032) * 0.08;
+      const scale = 1 + Math.sin(performance.now() * 0.0032) * 0.03;
       bundle.dot.scale.setScalar(scale);
+      bundle.halo.scale.setScalar(1 + Math.sin(performance.now() * 0.0024) * 0.04);
     });
 
     this.controls?.update();
