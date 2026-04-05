@@ -419,6 +419,13 @@ function hashString(value: string): number {
   return Math.abs(hash);
 }
 
+function directionForLatLngWithFocus(lat: number, lng: number, focusX: number, focusY: number): THREE.Vector3 {
+  const direction = latLngToVector(lat, lng, 1);
+  const tiltQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, EARTH_TILT));
+  const focusQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(focusX, focusY, 0));
+  return direction.applyQuaternion(tiltQuaternion).applyQuaternion(focusQuaternion).normalize();
+}
+
 @Component({
   selector: 'app-root',
   templateUrl: './app.html',
@@ -581,6 +588,8 @@ export class App implements AfterViewInit, OnDestroy {
   private currentFocusY = 0;
   private targetFocusX = 0;
   private targetFocusY = 0;
+  private desiredCameraPosition = new THREE.Vector3(0, 0.2, 5.1);
+  private autoFramingActive = false;
   private readonly markerBundles = new Map<string, MarkerBundle>();
   private readonly tempVector = new THREE.Vector3();
 
@@ -595,7 +604,7 @@ export class App implements AfterViewInit, OnDestroy {
 
     this.syncMarkers(markers, activeCity.id);
     this.targetFocusY = -THREE.MathUtils.degToRad(activeCity.lng);
-    this.targetFocusX = THREE.MathUtils.degToRad(clamp(activeCity.lat * 0.68, -48, 48));
+    this.targetFocusX = THREE.MathUtils.degToRad(clamp(activeCity.lat, -72, 72));
     this.updateSunTarget(subsolarPoint.lat, subsolarPoint.lng);
   });
 
@@ -627,6 +636,7 @@ export class App implements AfterViewInit, OnDestroy {
     const utcMs = this.referenceUtcMs();
     this.activeCityIndex.set(index);
     this.reanchorMoment(utcMs, this.activeCity());
+    this.planCameraForActiveCity(true);
   }
 
   protected removeCity(index: number, event: Event): void {
@@ -647,6 +657,7 @@ export class App implements AfterViewInit, OnDestroy {
     this.selectedCities.set(nextCities);
     this.activeCityIndex.set(nextActiveIndex);
     this.reanchorMoment(utcMs, this.activeCity());
+    this.planCameraForActiveCity(true);
   }
 
   protected openCityModal(): void {
@@ -669,6 +680,7 @@ export class App implements AfterViewInit, OnDestroy {
     this.selectedCities.update((current) => [...current, city]);
     this.activeCityIndex.set(this.selectedCities().length - 1);
     this.reanchorMoment(utcMs, this.activeCity());
+    this.planCameraForActiveCity(true);
     this.closeCityModal();
   }
 
@@ -874,6 +886,51 @@ export class App implements AfterViewInit, OnDestroy {
     this.hourOfDay.set(localDate.getUTCHours() * 60 + localDate.getUTCMinutes());
   }
 
+  private planCameraForActiveCity(animate: boolean): void {
+    if (!this.camera) {
+      return;
+    }
+
+    const activeCity = this.activeCity();
+    const subsolar = this.subsolarPoint();
+    const nextFocusX = THREE.MathUtils.degToRad(clamp(activeCity.lat, -72, 72));
+    const nextFocusY = -THREE.MathUtils.degToRad(activeCity.lng);
+    const cityDirection = directionForLatLngWithFocus(activeCity.lat, activeCity.lng, nextFocusX, nextFocusY);
+    const sunDirection = directionForLatLngWithFocus(subsolar.lat, subsolar.lng, nextFocusX, nextFocusY);
+    const framingDirection = cityDirection.clone().multiplyScalar(1.72).add(sunDirection.clone().multiplyScalar(0.88));
+
+    if (framingDirection.lengthSq() < 0.0001) {
+      framingDirection.copy(cityDirection);
+    }
+
+    framingDirection.normalize();
+
+    if (framingDirection.dot(cityDirection) < 0.82) {
+      framingDirection.lerp(cityDirection, 0.58).normalize();
+    }
+
+    const angularSeparation = Math.acos(clamp(cityDirection.dot(sunDirection), -1, 1));
+    const distance = clamp(3.45 + angularSeparation * 0.55, 3.5, 4.95);
+    const verticalBias = new THREE.Vector3(0, 0.08, 0);
+    const desiredPosition = framingDirection.clone().multiplyScalar(distance).add(verticalBias);
+
+    this.targetFocusX = nextFocusX;
+    this.targetFocusY = nextFocusY;
+    this.desiredCameraPosition.copy(desiredPosition);
+
+    if (!animate) {
+      this.currentFocusX = nextFocusX;
+      this.currentFocusY = nextFocusY;
+      this.focusGroup?.rotation.set(nextFocusX, nextFocusY, 0);
+      this.camera.position.copy(this.desiredCameraPosition);
+      this.controls?.update();
+      this.autoFramingActive = false;
+      return;
+    }
+
+    this.autoFramingActive = true;
+  }
+
   private initScene(host: HTMLDivElement): void {
     try {
       const width = host.clientWidth || 960;
@@ -903,9 +960,12 @@ export class App implements AfterViewInit, OnDestroy {
       this.controls.enablePan = false;
       this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.05;
-      this.controls.minDistance = 1.85;
-      this.controls.maxDistance = 8.2;
+      this.controls.minDistance = 1.75;
+      this.controls.maxDistance = 8.8;
       this.controls.target.set(0, 0, 0);
+      this.controls.addEventListener('start', () => {
+        this.autoFramingActive = false;
+      });
 
       this.focusGroup = new THREE.Group();
       this.tiltGroup = new THREE.Group();
@@ -926,6 +986,7 @@ export class App implements AfterViewInit, OnDestroy {
       this.sceneReady = true;
       this.syncMarkers(this.citySnapshots(), this.activeCity().id);
       this.updateSunTarget(this.subsolarPoint().lat, this.subsolarPoint().lng);
+      this.planCameraForActiveCity(false);
       void this.loadGeographyData();
       void this.ensureWorldCatalogLoaded();
       this.animate();
@@ -1714,6 +1775,15 @@ export class App implements AfterViewInit, OnDestroy {
     if (this.focusGroup) {
       this.focusGroup.rotation.x = this.currentFocusX;
       this.focusGroup.rotation.y = this.currentFocusY;
+    }
+
+    if (this.autoFramingActive) {
+      this.camera.position.lerp(this.desiredCameraPosition, 0.06);
+
+      if (this.camera.position.distanceToSquared(this.desiredCameraPosition) < 0.0008) {
+        this.camera.position.copy(this.desiredCameraPosition);
+        this.autoFramingActive = false;
+      }
     }
 
     if (this.cloudsSphere) {
