@@ -1443,7 +1443,7 @@ export class App implements AfterViewInit, OnDestroy {
         blending: THREE.AdditiveBlending
       })
     );
-    this.sunMesh.scale.set(0.78, 0.78, 1);
+    this.sunMesh.scale.set(1, 1, 1);
 
     this.sunHalo = new THREE.Sprite(
       new THREE.SpriteMaterial({
@@ -1454,7 +1454,7 @@ export class App implements AfterViewInit, OnDestroy {
         blending: THREE.AdditiveBlending
       })
     );
-    this.sunHalo.scale.set(1.58, 1.58, 1);
+    this.sunHalo.scale.set(1.96, 1.96, 1);
 
     this.sunCorona = new THREE.Sprite(
       new THREE.SpriteMaterial({
@@ -1465,7 +1465,7 @@ export class App implements AfterViewInit, OnDestroy {
         blending: THREE.AdditiveBlending
       })
     );
-    this.sunCorona.scale.set(2.2, 2.2, 1);
+    this.sunCorona.scale.set(2.72, 2.72, 1);
 
     this.scene.add(this.sunMesh, this.sunHalo, this.sunCorona);
   }
@@ -2261,15 +2261,15 @@ export class App implements AfterViewInit, OnDestroy {
 
     const pulse = 1 + Math.sin(performance.now() * 0.0022) * 0.06;
     if (this.sunMesh) {
-      this.sunMesh.scale.setScalar(0.78 + Math.sin(performance.now() * 0.0024) * 0.025);
+      this.sunMesh.scale.setScalar(1 + Math.sin(performance.now() * 0.0024) * 0.03);
     }
 
     if (this.sunHalo) {
-      this.sunHalo.scale.setScalar(1.56 + Math.sin(performance.now() * 0.0019) * 0.08);
+      this.sunHalo.scale.setScalar(1.96 + Math.sin(performance.now() * 0.0019) * 0.1);
     }
 
     if (this.sunCorona) {
-      this.sunCorona.scale.setScalar(2.18 + Math.sin(performance.now() * 0.0015) * 0.12);
+      this.sunCorona.scale.setScalar(2.72 + Math.sin(performance.now() * 0.0015) * 0.16);
       (this.sunCorona.material as THREE.SpriteMaterial).rotation += 0.0018;
     }
 
