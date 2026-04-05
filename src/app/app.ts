@@ -93,6 +93,11 @@ interface CountryLabelPoint {
   lng: number;
 }
 
+interface StoredCitySelection {
+  cities: City[];
+  activeCityId?: string;
+}
+
 const TAU = Math.PI * 2;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -168,6 +173,9 @@ const DEFAULT_CITIES: City[] = [
   createCity('Tokyo', 'JP', 35.6764, 139.65, 'Tokyo', 9),
   createCity('Sydney', 'AU', -33.8688, 151.2093, 'New South Wales', 10)
 ];
+
+const INITIAL_FALLBACK_CITY = DEFAULT_CITIES[0];
+const CITY_SELECTION_STORAGE_KEY = 'solarclock:selected-cities:v1';
 
 const DISCOVERY_CITIES: City[] = [
   createCity('Reykjavik', 'IS', 64.1466, -21.9426),
@@ -435,6 +443,83 @@ function directionForLatLngWithFocus(lat: number, lng: number, focusX: number, f
   return direction.applyQuaternion(tiltQuaternion).applyQuaternion(focusQuaternion).normalize();
 }
 
+function restoreCity(raw: unknown): City | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const candidate = raw as Partial<City>;
+
+  if (
+    typeof candidate.name !== 'string' ||
+    typeof candidate.countryCode !== 'string' ||
+    typeof candidate.lat !== 'number' ||
+    typeof candidate.lng !== 'number'
+  ) {
+    return null;
+  }
+
+  return createCity(
+    candidate.name,
+    candidate.countryCode,
+    candidate.lat,
+    candidate.lng,
+    typeof candidate.admin1 === 'string' ? candidate.admin1 : '',
+    typeof candidate.utc === 'number' ? candidate.utc : undefined
+  );
+}
+
+function parseStoredCitySelection(value: string | null): StoredCitySelection | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as { cities?: unknown[]; activeCityId?: unknown };
+    const cities = Array.isArray(parsed.cities) ? parsed.cities.map(restoreCity).filter((city): city is City => !!city) : [];
+
+    if (!cities.length) {
+      return null;
+    }
+
+    return {
+      cities,
+      activeCityId: typeof parsed.activeCityId === 'string' ? parsed.activeCityId : undefined
+    };
+  } catch {
+    return null;
+  }
+}
+
+function distanceBetweenCoordinatesKm(latA: number, lngA: number, latB: number, lngB: number): number {
+  const earthRadiusKm = 6371;
+  const latDelta = THREE.MathUtils.degToRad(latB - latA);
+  const lngDelta = THREE.MathUtils.degToRad(lngB - lngA);
+  const startLat = THREE.MathUtils.degToRad(latA);
+  const endLat = THREE.MathUtils.degToRad(latB);
+  const haversine =
+    Math.sin(latDelta / 2) * Math.sin(latDelta / 2) +
+    Math.cos(startLat) * Math.cos(endLat) * Math.sin(lngDelta / 2) * Math.sin(lngDelta / 2);
+
+  return 2 * earthRadiusKm * Math.asin(Math.sqrt(haversine));
+}
+
+function nearestCityToCoordinates(cities: City[], lat: number, lng: number): City | null {
+  let bestCity: City | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (const city of cities) {
+    const distance = distanceBetweenCoordinatesKm(lat, lng, city.lat, city.lng);
+
+    if (distance < bestDistance) {
+      bestCity = city;
+      bestDistance = distance;
+    }
+  }
+
+  return bestCity;
+}
+
 @Component({
   selector: 'app-root',
   templateUrl: './app.html',
@@ -451,7 +536,7 @@ export class App implements AfterViewInit, OnDestroy {
   protected readonly isLiveMode = signal(true);
   protected readonly isLeftPanelOpen = signal(false);
   protected readonly isRightPanelOpen = signal(false);
-  protected readonly selectedCities = signal(DEFAULT_CITIES);
+  protected readonly selectedCities = signal([INITIAL_FALLBACK_CITY]);
   protected readonly activeCityIndex = signal(0);
   protected readonly worldCities = signal<City[]>([]);
   protected readonly cityCatalogStatus = signal<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -460,7 +545,7 @@ export class App implements AfterViewInit, OnDestroy {
   private readonly platformId = inject(PLATFORM_ID);
   private readonly isBrowser = isPlatformBrowser(this.platformId);
 
-  private readonly initialCity = this.selectedCities()[0];
+  private readonly initialCity = INITIAL_FALLBACK_CITY;
   private readonly initialMoment = cityLocalDate(Date.now(), this.initialCity);
 
   protected readonly hourOfDay = signal(
@@ -597,6 +682,8 @@ export class App implements AfterViewInit, OnDestroy {
   private animationFrameId?: number;
   private playbackTimer?: number;
   private liveClockTimer?: number;
+  private worldCatalogLoadPromise?: Promise<City[]>;
+  private hasRestoredStoredSelection = false;
   private sceneReady = false;
   private earthSphere?: THREE.Mesh;
   private cloudsSphere?: THREE.Mesh;
@@ -687,6 +774,7 @@ export class App implements AfterViewInit, OnDestroy {
     this.activeCityIndex.set(index);
     this.reanchorMoment(utcMs, this.activeCity());
     this.planCameraForActiveCity(true);
+    this.persistCitySelection();
   }
 
   protected removeCity(index: number, event: Event): void {
@@ -708,6 +796,7 @@ export class App implements AfterViewInit, OnDestroy {
     this.activeCityIndex.set(nextActiveIndex);
     this.reanchorMoment(utcMs, this.activeCity());
     this.planCameraForActiveCity(true);
+    this.persistCitySelection();
   }
 
   protected openCityModal(): void {
@@ -731,6 +820,7 @@ export class App implements AfterViewInit, OnDestroy {
     this.activeCityIndex.set(this.selectedCities().length - 1);
     this.reanchorMoment(utcMs, this.activeCity());
     this.planCameraForActiveCity(true);
+    this.persistCitySelection();
     this.closeCityModal();
   }
 
@@ -812,8 +902,13 @@ export class App implements AfterViewInit, OnDestroy {
       return;
     }
 
+    this.restoreCitySelectionFromStorage();
     this.startLiveClock();
     this.initScene(this.sceneHost.nativeElement);
+
+    if (!this.hasRestoredStoredSelection) {
+      void this.bootstrapInitialCitySelection();
+    }
   }
 
   ngOnDestroy(): void {
@@ -862,6 +957,134 @@ export class App implements AfterViewInit, OnDestroy {
     this.reanchorMoment(nextUtcMs, this.activeCity());
   }
 
+  private restoreCitySelectionFromStorage(): void {
+    if (!this.isBrowser) {
+      return;
+    }
+
+    const restored = parseStoredCitySelection(window.localStorage.getItem(CITY_SELECTION_STORAGE_KEY));
+
+    if (!restored) {
+      return;
+    }
+
+    const activeIndex = clamp(
+      restored.cities.findIndex((city) => city.id === restored.activeCityId),
+      0,
+      restored.cities.length - 1
+    );
+    this.selectedCities.set(restored.cities);
+    this.activeCityIndex.set(activeIndex);
+    this.reanchorMoment(Date.now(), restored.cities[activeIndex] ?? restored.cities[0]);
+    this.hasRestoredStoredSelection = true;
+  }
+
+  private persistCitySelection(): void {
+    if (!this.isBrowser || !this.selectedCities().length) {
+      return;
+    }
+
+    const payload: StoredCitySelection = {
+      cities: this.selectedCities(),
+      activeCityId: this.activeCity().id
+    };
+
+    window.localStorage.setItem(CITY_SELECTION_STORAGE_KEY, JSON.stringify(payload));
+  }
+
+  private async bootstrapInitialCitySelection(): Promise<void> {
+    const catalog = await this.ensureWorldCatalogLoaded();
+    const detectedCity =
+      (await this.detectCityFromBrowserLocation(catalog)) ??
+      this.detectCityFromBrowserTimeZone(catalog) ??
+      INITIAL_FALLBACK_CITY;
+
+    this.applyDetectedInitialCity(detectedCity);
+  }
+
+  private async detectCityFromBrowserLocation(catalog: City[]): Promise<City | null> {
+    if (!this.isBrowser || !('geolocation' in navigator)) {
+      return null;
+    }
+
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: false,
+          timeout: 6000,
+          maximumAge: 900_000
+        });
+      });
+
+      return nearestCityToCoordinates(catalog, position.coords.latitude, position.coords.longitude);
+    } catch {
+      return null;
+    }
+  }
+
+  private detectCityFromBrowserTimeZone(catalog: City[]): City | null {
+    if (!this.isBrowser) {
+      return null;
+    }
+
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+    if (!timeZone) {
+      return null;
+    }
+
+    const parts = timeZone.split('/');
+    const primaryName = parts[parts.length - 1]?.replace(/_/g, ' ').trim();
+    const regionCode = this.detectBrowserRegionCode();
+
+    if (!primaryName) {
+      return null;
+    }
+
+    const normalizedPrimaryName = normalizeSearchText(primaryName);
+    const exactMatches = catalog.filter((city) => normalizeSearchText(city.name) === normalizedPrimaryName);
+
+    if (regionCode) {
+      const regionalMatch = exactMatches.find((city) => city.countryCode === regionCode);
+
+      if (regionalMatch) {
+        return regionalMatch;
+      }
+    }
+
+    if (exactMatches.length) {
+      return exactMatches[0];
+    }
+
+    const tokenMatches = searchCities(catalog, new Set(), normalizedPrimaryName);
+    return tokenMatches[0] ?? null;
+  }
+
+  private detectBrowserRegionCode(): string | null {
+    if (!this.isBrowser) {
+      return null;
+    }
+
+    const locale = navigator.languages?.[0] ?? navigator.language;
+    const match = locale?.match(/-([A-Za-z]{2})$/);
+    return match ? match[1].toUpperCase() : null;
+  }
+
+  private applyDetectedInitialCity(city: City): void {
+    const current = this.selectedCities();
+
+    if (current.length === 1 && current[0]?.id === city.id) {
+      this.persistCitySelection();
+      return;
+    }
+
+    this.selectedCities.set([city]);
+    this.activeCityIndex.set(0);
+    this.reanchorMoment(Date.now(), city);
+    this.planCameraForActiveCity(true);
+    this.persistCitySelection();
+  }
+
   private startLiveClock(): void {
     if (!this.isBrowser) {
       return;
@@ -880,31 +1103,47 @@ export class App implements AfterViewInit, OnDestroy {
     this.liveClockTimer = window.setInterval(syncLiveMoment, 1000);
   }
 
-  private async ensureWorldCatalogLoaded(): Promise<void> {
-    if (!this.isBrowser || this.cityCatalogStatus() === 'loading' || this.cityCatalogStatus() === 'ready') {
-      return;
+  private async ensureWorldCatalogLoaded(): Promise<City[]> {
+    if (!this.isBrowser) {
+      return [];
     }
 
-    try {
+    if (this.cityCatalogStatus() === 'ready') {
+      return this.worldCities();
+    }
+
+    if (this.worldCatalogLoadPromise) {
+      return this.worldCatalogLoadPromise;
+    }
+
+    this.worldCatalogLoadPromise = (async () => {
       this.cityCatalogStatus.set('loading');
-      const response = await fetch('data/world-cities.min.json');
+      try {
+        const response = await fetch('data/world-cities.min.json');
 
-      if (!response.ok) {
-        throw new Error(`Failed to load catalog: ${response.status}`);
+        if (!response.ok) {
+          throw new Error(`Failed to load catalog: ${response.status}`);
+        }
+
+        const rows = (await response.json()) as WorldCityRow[];
+        const cities = rows
+          .map((row) => createCityFromRow(row))
+          .sort((left, right) =>
+            left.name.localeCompare(right.name) || left.country.localeCompare(right.country)
+          );
+
+        this.worldCities.set(cities);
+        this.cityCatalogStatus.set('ready');
+        return cities;
+      } catch {
+        this.cityCatalogStatus.set('error');
+        return [];
+      } finally {
+        this.worldCatalogLoadPromise = undefined;
       }
+    })();
 
-      const rows = (await response.json()) as WorldCityRow[];
-      const cities = rows
-        .map((row) => createCityFromRow(row))
-        .sort((left, right) =>
-          left.name.localeCompare(right.name) || left.country.localeCompare(right.country)
-        );
-
-      this.worldCities.set(cities);
-      this.cityCatalogStatus.set('ready');
-    } catch {
-      this.cityCatalogStatus.set('error');
-    }
+    return this.worldCatalogLoadPromise;
   }
 
   private async loadGeographyData(): Promise<void> {
