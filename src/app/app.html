@@ -93,6 +93,11 @@
     </div>
 
     <div #sceneHost class="stage__viewport" aria-label="Three dimensional Earth view"></div>
+    <div #activeCityOverlay class="active-city-overlay" aria-hidden="true">
+      <span class="active-city-overlay__city">{{ activeCity().name }}</span>
+      <strong class="active-city-overlay__time">{{ overlayTimeLabel() }}</strong>
+      <span class="active-city-overlay__meta">{{ overlayMetaLabel() }}</span>
+    </div>
 
     <div class="stage__footer">
       <div class="stage__footer-card">
@@ -189,7 +194,7 @@
         min="0"
         max="1439"
         step="1"
-        [value]="hourOfDay()"
+        [value]="timelineHourValue()"
         (input)="updateHour(($any($event.target).value))"
       />
       <div class="transport__scale">
@@ -211,7 +216,7 @@
         min="1"
         max="365"
         step="1"
-        [value]="dayOfYear()"
+        [value]="timelineDayValue()"
         (input)="updateDayOfYear(($any($event.target).value))"
       />
       <div class="transport__scale">
@@ -226,6 +231,9 @@
     <div class="transport__date">
       <span>Date</span>
       <strong>{{ dateLabel() }}</strong>
+      <button type="button" class="transport__live" [class.transport__live--active]="isLiveMode()" (click)="jumpToLive()">
+        {{ isLiveMode() ? 'Live now' : 'Return to live' }}
+      </button>
     </div>
   </section>
 

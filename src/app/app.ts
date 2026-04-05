@@ -221,6 +221,14 @@ function formatClock24(decimalHours: number): string {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
+function formatClock24WithSeconds(date: Date): string {
+  return [
+    String(date.getUTCHours()).padStart(2, '0'),
+    String(date.getUTCMinutes()).padStart(2, '0'),
+    String(date.getUTCSeconds()).padStart(2, '0')
+  ].join(':');
+}
+
 function formatClock12(decimalHours: number): string {
   const normalized = normalizeHour(decimalHours);
   const hours = Math.floor(normalized);
@@ -434,14 +442,17 @@ function directionForLatLngWithFocus(lat: number, lng: number, focusX: number, f
 })
 export class App implements AfterViewInit, OnDestroy {
   @ViewChild('sceneHost') private sceneHost?: ElementRef<HTMLDivElement>;
+  @ViewChild('activeCityOverlay') private activeCityOverlay?: ElementRef<HTMLDivElement>;
 
   protected readonly citySearch = signal('');
   protected readonly isModalOpen = signal(false);
   protected readonly isPlaying = signal(false);
+  protected readonly isLiveMode = signal(true);
   protected readonly selectedCities = signal(DEFAULT_CITIES);
   protected readonly activeCityIndex = signal(0);
   protected readonly worldCities = signal<City[]>([]);
   protected readonly cityCatalogStatus = signal<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  protected readonly liveNowMs = signal(Date.now());
 
   private readonly platformId = inject(PLATFORM_ID);
   private readonly isBrowser = isPlatformBrowser(this.platformId);
@@ -458,6 +469,10 @@ export class App implements AfterViewInit, OnDestroy {
     () => this.selectedCities()[this.activeCityIndex()] ?? this.selectedCities()[0]
   );
   protected readonly referenceUtcMs = computed(() => {
+    if (this.isLiveMode()) {
+      return this.liveNowMs();
+    }
+
     const activeCity = this.activeCity();
     const baseDate = Date.UTC(this.initialMoment.getUTCFullYear(), 0, this.dayOfYear(), 0, 0, 0, 0);
     return baseDate + this.hourOfDay() * MINUTE_MS - activeCity.utc * HOUR_MS;
@@ -497,6 +512,15 @@ export class App implements AfterViewInit, OnDestroy {
     () => `${WEEKDAY_NAMES[this.activeSnapshot().localDate.getUTCDay()]} · ${this.activeCity().country}`
   );
   protected readonly hourLabel = computed(() => formatClock24(this.activeSnapshot().decimalHours));
+  protected readonly overlayTimeLabel = computed(() => formatClock24WithSeconds(this.activeSnapshot().localDate));
+  protected readonly overlayMetaLabel = computed(
+    () => `${WEEKDAY_NAMES[this.activeSnapshot().localDate.getUTCDay()]} · ${this.utcOffsetLabel()}`
+  );
+  protected readonly timelineHourValue = computed(() => {
+    const snapshot = this.activeSnapshot();
+    return snapshot.localDate.getUTCHours() * 60 + snapshot.localDate.getUTCMinutes();
+  });
+  protected readonly timelineDayValue = computed(() => this.activeSnapshot().dayOfYear);
   protected readonly seasonSliderLabel = computed(() => formatMonthDay(this.activeSnapshot().localDate));
   protected readonly dayLengthLabel = computed(() => {
     const dayLength = this.activeSnapshot().dayLength;
@@ -569,6 +593,7 @@ export class App implements AfterViewInit, OnDestroy {
   private resizeObserver?: ResizeObserver;
   private animationFrameId?: number;
   private playbackTimer?: number;
+  private liveClockTimer?: number;
   private sceneReady = false;
   private earthSphere?: THREE.Mesh;
   private cloudsSphere?: THREE.Mesh;
@@ -592,6 +617,7 @@ export class App implements AfterViewInit, OnDestroy {
   private autoFramingActive = false;
   private readonly markerBundles = new Map<string, MarkerBundle>();
   private readonly tempVector = new THREE.Vector3();
+  private readonly tempVectorB = new THREE.Vector3();
 
   private readonly syncSceneEffect = effect(() => {
     const activeCity = this.activeCity();
@@ -613,10 +639,14 @@ export class App implements AfterViewInit, OnDestroy {
   }
 
   protected updateHour(value: string): void {
+    this.stopPlayback();
+    this.isLiveMode.set(false);
     this.hourOfDay.set(Number(value));
   }
 
   protected updateDayOfYear(value: string): void {
+    this.stopPlayback();
+    this.isLiveMode.set(false);
     this.dayOfYear.set(Number(value));
   }
 
@@ -626,10 +656,19 @@ export class App implements AfterViewInit, OnDestroy {
       return;
     }
 
+    this.isLiveMode.set(false);
     this.isPlaying.set(true);
     this.playbackTimer = window.setInterval(() => {
       this.shiftTimeline(8);
     }, 120);
+  }
+
+  protected jumpToLive(): void {
+    this.stopPlayback();
+    const now = Date.now();
+    this.liveNowMs.set(now);
+    this.reanchorMoment(now, this.activeCity());
+    this.isLiveMode.set(true);
   }
 
   protected selectCity(index: number): void {
@@ -762,6 +801,7 @@ export class App implements AfterViewInit, OnDestroy {
       return;
     }
 
+    this.startLiveClock();
     this.initScene(this.sceneHost.nativeElement);
   }
 
@@ -770,6 +810,11 @@ export class App implements AfterViewInit, OnDestroy {
 
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
+    }
+
+    if (this.liveClockTimer) {
+      clearInterval(this.liveClockTimer);
+      this.liveClockTimer = undefined;
     }
 
     this.resizeObserver?.disconnect();
@@ -801,8 +846,27 @@ export class App implements AfterViewInit, OnDestroy {
   }
 
   private shiftTimeline(deltaMinutes: number): void {
+    this.isLiveMode.set(false);
     const nextUtcMs = this.referenceUtcMs() + deltaMinutes * MINUTE_MS;
     this.reanchorMoment(nextUtcMs, this.activeCity());
+  }
+
+  private startLiveClock(): void {
+    if (!this.isBrowser) {
+      return;
+    }
+
+    const syncLiveMoment = () => {
+      const now = Date.now();
+      this.liveNowMs.set(now);
+
+      if (this.isLiveMode() && !this.isPlaying()) {
+        this.reanchorMoment(now, this.activeCity());
+      }
+    };
+
+    syncLiveMoment();
+    this.liveClockTimer = window.setInterval(syncLiveMoment, 1000);
   }
 
   private async ensureWorldCatalogLoaded(): Promise<void> {
@@ -910,8 +974,8 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     const angularSeparation = Math.acos(clamp(cityDirection.dot(sunDirection), -1, 1));
-    const distance = clamp(3.45 + angularSeparation * 0.55, 3.5, 4.95);
-    const verticalBias = new THREE.Vector3(0, 0.08, 0);
+    const distance = clamp(4.3 + angularSeparation * 0.7, 4.45, 5.95);
+    const verticalBias = new THREE.Vector3(0, 0.12, 0);
     const desiredPosition = framingDirection.clone().multiplyScalar(distance).add(verticalBias);
 
     this.targetFocusX = nextFocusX;
@@ -960,8 +1024,8 @@ export class App implements AfterViewInit, OnDestroy {
       this.controls.enablePan = false;
       this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.05;
-      this.controls.minDistance = 1.75;
-      this.controls.maxDistance = 8.8;
+      this.controls.minDistance = 2.1;
+      this.controls.maxDistance = 9.2;
       this.controls.target.set(0, 0, 0);
       this.controls.addEventListener('start', () => {
         this.autoFramingActive = false;
@@ -1093,7 +1157,7 @@ export class App implements AfterViewInit, OnDestroy {
       new THREE.MeshStandardMaterial({
         map: cloudTexture,
         transparent: true,
-        opacity: 0.45,
+        opacity: 0.08,
         depthWrite: false
       })
     );
@@ -1109,7 +1173,7 @@ export class App implements AfterViewInit, OnDestroy {
       })
     );
 
-    this.tiltGroup.add(this.earthSphere, this.cloudsSphere, this.atmosphereSphere);
+    this.tiltGroup.add(this.earthSphere, this.atmosphereSphere);
   }
 
   private createLighting(): void {
@@ -1208,15 +1272,15 @@ export class App implements AfterViewInit, OnDestroy {
     group.lookAt(outward.clone().multiplyScalar(2));
 
     const dot = new THREE.Mesh(
-      new THREE.SphereGeometry(0.03, 18, 18),
+      new THREE.SphereGeometry(0.048, 22, 22),
       new THREE.MeshStandardMaterial({
         color: '#ffbf54',
         emissive: '#ffbf54',
-        emissiveIntensity: 1,
-        roughness: 0.25
+        emissiveIntensity: 1.35,
+        roughness: 0.18
       })
     );
-    dot.position.z = 0.04;
+    dot.position.z = 0.06;
 
     group.add(dot);
     return { group, dot };
@@ -1366,7 +1430,7 @@ export class App implements AfterViewInit, OnDestroy {
           colorCtx.rotate(rotation);
           colorCtx.fillStyle =
             absLat > 68
-              ? `rgba(245, 248, 251, ${0.06 + toneShift * 0.08})`
+              ? `rgba(198, 213, 221, ${0.03 + toneShift * 0.04})`
               : dryFactor > 0.65 && absLat < 28
                 ? `rgba(211, 178, 110, ${0.08 + toneShift * 0.08})`
                 : `rgba(76, 114, 65, ${0.06 + toneShift * 0.07})`;
@@ -1554,9 +1618,9 @@ export class App implements AfterViewInit, OnDestroy {
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
     const material = new THREE.LineBasicMaterial({
-      color: '#d0ecff',
+      color: '#2d658b',
       transparent: true,
-      opacity: 0.28
+      opacity: 0.08
     });
 
     return new THREE.LineSegments(geometry, material);
@@ -1741,6 +1805,44 @@ export class App implements AfterViewInit, OnDestroy {
     this.composer.setSize(width, height);
   }
 
+  private updateActiveCityOverlay(): void {
+    const overlay = this.activeCityOverlay?.nativeElement;
+
+    if (!overlay) {
+      return;
+    }
+
+    const host = this.sceneHost?.nativeElement;
+    const camera = this.camera;
+    const activeCityId = this.activeCity().id;
+    const marker = this.markerBundles.get(activeCityId);
+
+    if (!host || !camera || !marker) {
+      overlay.style.opacity = '0';
+      return;
+    }
+
+    marker.dot.getWorldPosition(this.tempVector);
+    this.tempVectorB.copy(this.tempVector).project(camera);
+    const projectedZ = this.tempVectorB.z;
+    const width = host.clientWidth || 1;
+    const height = host.clientHeight || 1;
+    const x = (this.tempVectorB.x * 0.5 + 0.5) * width;
+    const y = (-this.tempVectorB.y * 0.5 + 0.5) * height;
+    const facing = this.tempVector.normalize().dot(this.tempVectorB.copy(camera.position).normalize());
+    const visible =
+      facing > 0.12 &&
+      projectedZ > -1 &&
+      projectedZ < 1 &&
+      x > -40 &&
+      x < width + 40 &&
+      y > -40 &&
+      y < height + 40;
+
+    overlay.style.opacity = visible ? '1' : '0';
+    overlay.style.transform = `translate3d(${Math.round(x + 18)}px, ${Math.round(y - 18)}px, 0)`;
+  }
+
   private updateSunTarget(subsolarLat: number, subsolarLng: number): void {
     if (
       !this.tiltGroup ||
@@ -1796,7 +1898,7 @@ export class App implements AfterViewInit, OnDestroy {
 
     if (this.countryBorderLines) {
       const material = this.countryBorderLines.material as THREE.LineBasicMaterial;
-      material.opacity = THREE.MathUtils.mapLinear(this.camera.position.length(), 6.6, 2.3, 0.1, 0.64);
+      material.opacity = THREE.MathUtils.mapLinear(this.camera.position.length(), 7.4, 2.1, 0.03, 0.12);
     }
 
     if (this.starField) {
@@ -1828,6 +1930,7 @@ export class App implements AfterViewInit, OnDestroy {
 
     this.controls?.update();
     this.updateSunTarget(this.subsolarPoint().lat, this.subsolarPoint().lng);
+    this.updateActiveCityOverlay();
     this.composer.render();
   };
 }
