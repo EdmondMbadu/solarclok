@@ -690,9 +690,9 @@ export class App implements AfterViewInit, OnDestroy {
   private atmosphereSphere?: THREE.Mesh;
   private countryBorderLines?: THREE.LineSegments;
   private starField?: THREE.Points;
-  private sunMesh?: THREE.Mesh;
-  private sunHalo?: THREE.Mesh;
-  private sunCorona?: THREE.Mesh;
+  private sunMesh?: THREE.Sprite;
+  private sunHalo?: THREE.Sprite;
+  private sunCorona?: THREE.Sprite;
   private sunLight?: THREE.DirectionalLight;
   private sunPointLight?: THREE.PointLight;
   private moonOrbiter?: THREE.Group;
@@ -1467,28 +1467,37 @@ export class App implements AfterViewInit, OnDestroy {
     this.sunPointLight.position.set(4.6, 1.4, 4.4);
     this.scene.add(this.sunPointLight);
 
-    this.sunMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.23, 32, 32),
-      new THREE.MeshBasicMaterial({ color: '#ffd97a' })
-    );
-    this.sunHalo = new THREE.Mesh(
-      new THREE.SphereGeometry(0.42, 32, 32),
-      new THREE.MeshBasicMaterial({
-        color: '#ffd37a',
+    this.sunMesh = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.createSunCoreTexture(),
         transparent: true,
-        opacity: 0.34,
+        depthWrite: false,
         blending: THREE.AdditiveBlending
       })
     );
-    this.sunCorona = new THREE.Mesh(
-      new THREE.SphereGeometry(0.72, 32, 32),
-      new THREE.MeshBasicMaterial({
-        color: '#ffbc63',
+    this.sunMesh.scale.set(0.78, 0.78, 1);
+
+    this.sunHalo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.createSunGlowTexture(),
         transparent: true,
-        opacity: 0.12,
+        depthWrite: false,
+        opacity: 0.7,
         blending: THREE.AdditiveBlending
       })
     );
+    this.sunHalo.scale.set(1.58, 1.58, 1);
+
+    this.sunCorona = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.createSunRayTexture(),
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.44,
+        blending: THREE.AdditiveBlending
+      })
+    );
+    this.sunCorona.scale.set(2.2, 2.2, 1);
 
     this.scene.add(this.sunMesh, this.sunHalo, this.sunCorona);
   }
@@ -2050,6 +2059,101 @@ export class App implements AfterViewInit, OnDestroy {
     return this.canvasToTexture(canvas);
   }
 
+  private canvasToSpriteTexture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  private createSunCoreTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+    const center = canvas.width / 2;
+
+    const outerGlow = ctx.createRadialGradient(center, center, 0, center, center, center * 0.9);
+    outerGlow.addColorStop(0, 'rgba(255, 249, 220, 1)');
+    outerGlow.addColorStop(0.2, 'rgba(255, 221, 132, 0.98)');
+    outerGlow.addColorStop(0.52, 'rgba(255, 171, 70, 0.86)');
+    outerGlow.addColorStop(0.78, 'rgba(255, 132, 46, 0.24)');
+    outerGlow.addColorStop(1, 'rgba(255, 132, 46, 0)');
+    ctx.fillStyle = outerGlow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const core = ctx.createRadialGradient(center, center, 0, center, center, center * 0.42);
+    core.addColorStop(0, 'rgba(255, 255, 243, 1)');
+    core.addColorStop(0.42, 'rgba(255, 234, 172, 0.98)');
+    core.addColorStop(0.86, 'rgba(255, 186, 84, 0.9)');
+    core.addColorStop(1, 'rgba(255, 150, 54, 0)');
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(center, center, center * 0.42, 0, TAU);
+    ctx.fill();
+
+    return this.canvasToSpriteTexture(canvas);
+  }
+
+  private createSunGlowTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+    const center = canvas.width / 2;
+    const glow = ctx.createRadialGradient(center, center, center * 0.08, center, center, center * 0.92);
+    glow.addColorStop(0, 'rgba(255, 235, 176, 0.7)');
+    glow.addColorStop(0.44, 'rgba(255, 184, 86, 0.34)');
+    glow.addColorStop(0.82, 'rgba(255, 141, 58, 0.08)');
+    glow.addColorStop(1, 'rgba(255, 141, 58, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    return this.canvasToSpriteTexture(canvas);
+  }
+
+  private createSunRayTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 768;
+    canvas.height = 768;
+    const ctx = canvas.getContext('2d')!;
+    const center = canvas.width / 2;
+
+    for (let ray = 0; ray < 18; ray += 1) {
+      const angle = (ray / 18) * TAU + (ray % 2) * 0.06;
+      const length = center * (ray % 3 === 0 ? 0.9 : ray % 2 === 0 ? 0.78 : 0.66);
+      const inner = center * 0.18;
+      const spread = ray % 2 === 0 ? 0.06 : 0.035;
+
+      ctx.beginPath();
+      ctx.moveTo(center + Math.cos(angle - spread) * inner, center + Math.sin(angle - spread) * inner);
+      ctx.lineTo(center + Math.cos(angle) * length, center + Math.sin(angle) * length);
+      ctx.lineTo(center + Math.cos(angle + spread) * inner, center + Math.sin(angle + spread) * inner);
+      ctx.closePath();
+
+      const gradient = ctx.createLinearGradient(
+        center,
+        center,
+        center + Math.cos(angle) * length,
+        center + Math.sin(angle) * length
+      );
+      gradient.addColorStop(0, 'rgba(255, 206, 108, 0.38)');
+      gradient.addColorStop(0.45, 'rgba(255, 180, 84, 0.18)');
+      gradient.addColorStop(1, 'rgba(255, 180, 84, 0)');
+      ctx.fillStyle = gradient;
+      ctx.fill();
+    }
+
+    const ring = ctx.createRadialGradient(center, center, center * 0.18, center, center, center * 0.64);
+    ring.addColorStop(0, 'rgba(255, 220, 136, 0)');
+    ring.addColorStop(0.52, 'rgba(255, 184, 83, 0.12)');
+    ring.addColorStop(0.82, 'rgba(255, 145, 62, 0.05)');
+    ring.addColorStop(1, 'rgba(255, 145, 62, 0)');
+    ctx.fillStyle = ring;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    return this.canvasToSpriteTexture(canvas);
+  }
+
   private paintBlob(
     ctx: CanvasRenderingContext2D,
     canvas: HTMLCanvasElement,
@@ -2192,12 +2296,17 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     const pulse = 1 + Math.sin(performance.now() * 0.0022) * 0.06;
+    if (this.sunMesh) {
+      this.sunMesh.scale.setScalar(0.78 + Math.sin(performance.now() * 0.0024) * 0.025);
+    }
+
     if (this.sunHalo) {
-      this.sunHalo.scale.setScalar(pulse * 1.18);
+      this.sunHalo.scale.setScalar(1.56 + Math.sin(performance.now() * 0.0019) * 0.08);
     }
 
     if (this.sunCorona) {
-      this.sunCorona.scale.setScalar(1.35 + Math.sin(performance.now() * 0.0015) * 0.08);
+      this.sunCorona.scale.setScalar(2.18 + Math.sin(performance.now() * 0.0015) * 0.12);
+      (this.sunCorona.material as THREE.SpriteMaterial).rotation += 0.0018;
     }
 
     if (this.sunPointLight) {
