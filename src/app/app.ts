@@ -694,7 +694,6 @@ export class App implements AfterViewInit, OnDestroy {
   private sunHalo?: THREE.Sprite;
   private sunCorona?: THREE.Sprite;
   private sunLight?: THREE.DirectionalLight;
-  private sunPointLight?: THREE.PointLight;
   private focusGroup?: THREE.Group;
   private tiltGroup?: THREE.Group;
   private markerRoot?: THREE.Group;
@@ -1176,6 +1175,7 @@ export class App implements AfterViewInit, OnDestroy {
       earthMaterial.bumpScale = 0.03;
       earthMaterial.roughnessMap = detailedTexture.roughness;
       earthMaterial.roughness = 1;
+      earthMaterial.specularIntensity = 0;
       earthMaterial.clearcoat = 0.14;
       earthMaterial.clearcoatRoughness = 1;
       earthMaterial.clearcoat = 0;
@@ -1391,6 +1391,7 @@ export class App implements AfterViewInit, OnDestroy {
         emissiveIntensity: 0.42,
         roughness: 1,
         metalness: 0,
+        specularIntensity: 0,
         clearcoat: 0,
         clearcoatRoughness: 1
       })
@@ -1431,9 +1432,6 @@ export class App implements AfterViewInit, OnDestroy {
     this.sunLight = new THREE.DirectionalLight('#ffd889', 3.8);
     this.sunLight.position.set(4.6, 1.4, 4.4);
     this.scene.add(this.sunLight);
-    this.sunPointLight = new THREE.PointLight('#ffcf78', 10, 26, 1.6);
-    this.sunPointLight.position.set(4.6, 1.4, 4.4);
-    this.scene.add(this.sunPointLight);
 
     this.sunMesh = new THREE.Sprite(
       new THREE.SpriteMaterial({
@@ -2202,8 +2200,7 @@ export class App implements AfterViewInit, OnDestroy {
       !this.sunLight ||
       !this.sunMesh ||
       !this.sunHalo ||
-      !this.sunCorona ||
-      !this.sunPointLight
+      !this.sunCorona
     ) {
       return;
     }
@@ -2211,7 +2208,6 @@ export class App implements AfterViewInit, OnDestroy {
     this.tempVector.copy(latLngToVector(subsolarLat, subsolarLng, 5));
     this.tiltGroup.localToWorld(this.tempVector);
     this.sunLight.position.lerp(this.tempVector, 0.35);
-    this.sunPointLight.position.lerp(this.tempVector, 0.35);
     this.sunMesh.position.lerp(this.tempVector, 0.35);
     this.sunHalo.position.lerp(this.tempVector, 0.35);
     this.sunCorona.position.lerp(this.tempVector, 0.35);
@@ -2259,7 +2255,6 @@ export class App implements AfterViewInit, OnDestroy {
       this.starField.rotation.x += 0.00002;
     }
 
-    const pulse = 1 + Math.sin(performance.now() * 0.0022) * 0.06;
     if (this.sunMesh) {
       this.sunMesh.scale.setScalar(1 + Math.sin(performance.now() * 0.0024) * 0.03);
     }
@@ -2271,10 +2266,6 @@ export class App implements AfterViewInit, OnDestroy {
     if (this.sunCorona) {
       this.sunCorona.scale.setScalar(2.72 + Math.sin(performance.now() * 0.0015) * 0.16);
       (this.sunCorona.material as THREE.SpriteMaterial).rotation += 0.0018;
-    }
-
-    if (this.sunPointLight) {
-      this.sunPointLight.intensity = 10.5 + Math.sin(performance.now() * 0.0018) * 0.8;
     }
 
     this.markerBundles.forEach((bundle) => {
