@@ -1227,22 +1227,9 @@ export class App implements AfterViewInit, OnDestroy {
     const nextFocusY = -THREE.MathUtils.degToRad(activeCity.lng);
     const cityDirection = directionForLatLngWithFocus(activeCity.lat, activeCity.lng, nextFocusX, nextFocusY);
     const sunDirection = directionForLatLngWithFocus(subsolar.lat, subsolar.lng, nextFocusX, nextFocusY);
-    const framingDirection = cityDirection.clone().multiplyScalar(1.42).add(sunDirection.clone().multiplyScalar(1.12));
-
-    if (framingDirection.lengthSq() < 0.0001) {
-      framingDirection.copy(cityDirection);
-    }
-
-    framingDirection.normalize();
-
-    if (framingDirection.dot(cityDirection) < 0.72) {
-      framingDirection.lerp(cityDirection, 0.42).normalize();
-    }
-
     const angularSeparation = Math.acos(clamp(cityDirection.dot(sunDirection), -1, 1));
     const distance = clamp(5.45 + angularSeparation * 1.28, 5.75, 7.8);
-    const verticalBias = new THREE.Vector3(0, 0.16, 0);
-    const desiredPosition = framingDirection.clone().multiplyScalar(distance).add(verticalBias);
+    const desiredPosition = cityDirection.clone().multiplyScalar(distance);
     const desiredFov = this.requiredFovForTargets(desiredPosition, [
       cityDirection.clone().multiplyScalar(1.28),
       sunDirection.clone().multiplyScalar(5)
